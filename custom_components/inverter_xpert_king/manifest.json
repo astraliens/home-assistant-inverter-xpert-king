@@ -1,0 +1,14 @@
+{
+  "domain": "inverter_xpert_king",
+  "name": "Inverter Xpert King",
+  "codeowners": ["@astraliens"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/astraliens/home-assistant-inverter-xpert-king",
+  "homekit": {},
+  "iot_class": "local_polling",
+  "requirements": [],
+  "ssdp": [],
+  "version": "0.1.0",
+  "zeroconf": []
+}
