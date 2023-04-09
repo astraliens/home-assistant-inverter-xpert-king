@@ -30,9 +30,15 @@ On gateway side you should configure TCP server to forward data from Serial port
 - Stop bit: 1
 - Parity: None
 
-For those, who lost cable or connecting inverter directly to device serial port pinout of connectors shown on photo:
+![inverter_connection](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/inverter_connection.jpg)
+![HF5142B_connection](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/HF5142B_connection.jpg)
+![HF5142B_TCP_Server](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/HF5142B_TCP_Server.jpg)
 
 After connecting inverter you need to add `home-assistant-inverter-xpert-king` integration using HACS to your HA. After this you can simply add it like regular integration, specifiying IP and port of gateway where inverter connected. In several seconds integration get data from inverter, create all found sensors and will update them constantly.
+
+For those, who lost cable or connecting inverter directly to device serial port pinout of connectors shown on photo:
+![rs232_db9_pinout](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/rs232_db9_pinout.png)
+
 
 ## Date and Time sync
 
