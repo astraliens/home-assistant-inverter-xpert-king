@@ -72,6 +72,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
         new_devices.append(SensorInverterBatteryCurrent(inverter))
         new_devices.append(SensorInverterBatteryPower(inverter))
+        new_devices.append(SensorInverterBatteryPowerCharging(inverter))
+        new_devices.append(SensorInverterBatteryDischarge(inverter))
         new_devices.append(SensorInverterEnergyToday(inverter))
         new_devices.append(SensorInverterEnergyTotal(inverter))
 
@@ -282,6 +284,25 @@ class SensorInverterBatteryPower(SensorBase):
     @property
     def state(self):
         return (self._inverter.get_state_param('battery_charging_current')["value"] - self._inverter.get_state_param('battery_discharge_current')["value"]) * self._inverter.get_state_param('battery_voltage')["value"]
+
+
+class SensorInverterBatteryPowerCharging(SensorInverterBatteryPower):
+    def __init__(self, inverter, param_name='battery_power_charging'):
+        super().__init__(inverter, param_name)
+        self._attr_name = f"Battery Power Charging"
+
+    @property
+    def state(self):
+        return self._inverter.get_state_param('battery_charging_current')["value"] * self._inverter.get_state_param('battery_voltage')["value"]
+    
+class SensorInverterBatteryDischarge(SensorInverterBatteryPower):
+    def __init__(self, inverter, param_name='battery_power_discharge'):
+        super().__init__(inverter, param_name)
+        self._attr_name = f"Battery Power Discharge"
+
+    @property
+    def state(self):
+        return self._inverter.get_state_param('battery_discharge_current')["value"] * self._inverter.get_state_param('battery_voltage')["value"]    
 
 class SensorInverterEnergyToday(SensorBase):
     device_class = SensorDeviceClass.ENERGY
