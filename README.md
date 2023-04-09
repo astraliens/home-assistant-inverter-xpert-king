@@ -34,7 +34,8 @@ On gateway side you should configure TCP server to forward data from Serial port
 ![HF5142B_connection](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/HF5142B_connection.jpg)
 ![HF5142B_TCP_Server](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/HF5142B_TCP_Server.jpg)
 
-After connecting inverter you need to add `home-assistant-inverter-xpert-king` integration using HACS to your HA. After this you can simply add it like regular integration, specifiying IP and port of gateway where inverter connected. In several seconds integration get data from inverter, create all found sensors and will update them constantly.
+After connecting inverter you need to add `home-assistant-inverter-xpert-king` integration using HACS to your HA. In you HA go to *Main Menu -> HACS -> Integrations*, in top right corner press 3 dots and click to "Custom Repositories". Add repository `https://github.com/astraliens/home-assistant-inverter-xpert-king` and category `Integration`. After this step close modal add repository window and press "Explore & Download Repositories" blue button at the bottom right corner of screen and search for `Inverter Axpert King` integration. Press on it and in right bottom corner of screen press "Download" button. 
+After this you can simply add it like regular integration, specifiying IP and port of gateway where inverter connected. In several seconds integration get data from inverter, create all found sensors and will update them constantly.
 
 For those, who lost cable or connecting inverter directly to device serial port pinout of connectors shown on photo:
 ![rs232_db9_pinout](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/rs232_db9_pinout.png)
