@@ -48,3 +48,13 @@ This integratino can sync your inverter date and time, but keep in mind that it 
 ## Energy consumption monitoring
 
 You can add `Total energy all time` sensor to your energy consumption monitoring to calculate your spents
+
+## Donations
+
+You can say thanks by donating for buying pizza at:
+
+<a href="https://www.buymeacoffee.com/astraliens" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Pizza" height="41" width="174"></a>
+
+or
+
+<a href="https://www.patreon.com/ASTRALiENS" target="_blank">Donate @ Patreon</a>
