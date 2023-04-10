@@ -1,5 +1,5 @@
 # Home Assistant Inverter Axpert King
-Home Assistant Integration for reading data from Axpert King inverters via RS232-TCP Gateway
+Home Assistant Integration for reading data from Axpert King (also known as Voltronic Axpert III) inverters via RS232-TCP Gateway
 
 ## Features
 
