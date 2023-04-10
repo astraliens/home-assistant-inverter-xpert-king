@@ -327,7 +327,8 @@ class SensorInverterEnergyToday(SensorBase):
 
 class SensorInverterEnergyTotal(SensorBase):
     device_class = SensorDeviceClass.ENERGY
-    state_class = SensorStateClass.TOTAL_INCREASING
+    #state_class = SensorStateClass.TOTAL_INCREASING # usefull, but untill we solve problem with processing incoming data with zerovalues TOTAL_INCREASING will lead to incorrect data aggregation on HA side
+    state_class = SensorStateClass.TOTAL
 
     def __init__(self, inverter, param_name='total_output_load_energy'):
         super().__init__(inverter, param_name)
