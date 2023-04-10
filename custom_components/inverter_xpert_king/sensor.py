@@ -253,6 +253,7 @@ class SensorInverterConfDiag(SensorBase):
 
 class SensorInverterBatteryCurrent(SensorBase):
     device_class = DEVICE_CLASS_CURRENT
+    state_class=SensorStateClass.MEASUREMENT
 
     def __init__(self, inverter, param_name='battery_current'):
         super().__init__(inverter, param_name)
@@ -270,6 +271,7 @@ class SensorInverterBatteryCurrent(SensorBase):
 
 class SensorInverterBatteryPower(SensorBase):
     device_class = DEVICE_CLASS_POWER
+    state_class=SensorStateClass.MEASUREMENT
 
     def __init__(self, inverter, param_name='battery_power'):
         super().__init__(inverter, param_name)
