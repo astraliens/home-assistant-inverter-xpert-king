@@ -10,14 +10,13 @@ Home Assistant Integration for reading data from Axpert King (also known as Volt
 
 ## Todo
 
-- Refactor code to work async using CoordinatorEntity
 - Clear code
 - Add options to change config params
 
 ## Notes
 
 This code was written for couple of days without any skills in Python and HA architecture. That is first time I've used Python, so anyone is welcome to make this code better.
-Due to low baud rate in inverter and incorrect usage of requests to get data from inverter this integration can slow down your HA, so keep this in mind and if you can help with optimizing - you are welcome.
+Due to low baud rate in inverter this integration can slow down your HA, so keep this in mind and if you can help with optimizing - you are welcome.
 
 ## Connecting Inverter to gateway and HA
 
@@ -54,7 +53,3 @@ You can add `Total energy all time` sensor to your energy consumption monitoring
 You can say thanks by donating for buying pizza at:
 
 <a href="https://www.buymeacoffee.com/astraliens" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Pizza" height="41" width="174"></a>
-
-or
-
-<a href="https://www.patreon.com/ASTRALiENS" target="_blank">Donate @ Patreon</a>
