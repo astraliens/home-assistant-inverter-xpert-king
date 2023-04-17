@@ -159,7 +159,8 @@ class InverterDataCoordinator(DataUpdateCoordinator):
                 # data retrieved from API.
                 listening_idx = set(self.async_contexts())
                 #return await self.hub.fetch_data(listening_idx)
-                return await self.hub.inverter_client.GetInverterDataByCommand('data')
+                return await self.hass.async_add_executor_job(self.hub.inverter_client.GetInverterDataByCommandSync,'data') # nedd to avoid problem with UI freezing during data update process
+                #return await self.hub.inverter_client.GetInverterDataByCommand('data')
                 
         except Exception as e:
             s = str(e)
