@@ -35,9 +35,20 @@ import time
 
 from homeassistant.components.sensor import STATE_CLASS_TOTAL_INCREASING
 
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
+import async_timeout
+from homeassistant.core import callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
+import time
+
+
 import logging
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=4)
+#SCAN_INTERVAL = timedelta(seconds=4)
 
 
 # See cover.py for more details.
@@ -50,68 +61,193 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     new_devices = []
     for inverter in hub.inverters:
-        available_params=inverter.get_available_params()
+        coordinator = InverterDataCoordinator(hass, hub, inverter)
+        await coordinator.async_config_entry_first_refresh()
+
+        coordinator_diag = InverterConfigCoordinator(hass, hub, inverter)
+        await coordinator_diag.async_config_entry_first_refresh()        
+        available_params=inverter.get_available_params('data')
+
         for inverter_param in available_params:
             match inverter_param["sensor"]:
                 case "voltage":
-                    new_devices.append(SensorInverterVoltage(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterVoltage(coordinator,inverter,inverter_param))
                 case "current":
-                    new_devices.append(SensorInverterCurrent(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterCurrent(coordinator,inverter,inverter_param))
                 case "frequency":
-                    new_devices.append(SensorInverterFrequency(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterFrequency(coordinator,inverter,inverter_param))
                 case "power":
-                    new_devices.append(SensorInverterPower(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterPower(coordinator,inverter,inverter_param))
+                case "energy":
+                    new_devices.append(SensorInverterEnergy(coordinator,inverter,inverter_param))
+                case "energy_total":
+                    new_devices.append(SensorInverterEnergyTotal(coordinator,inverter,inverter_param))
                 case "percent":
-                    new_devices.append(SensorInverterPercent(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterPercent(coordinator,inverter,inverter_param))
                 case "battery":
-                    new_devices.append(SensorInverterBattery(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterBattery(coordinator,inverter,inverter_param))
                 case "temperature":
-                    new_devices.append(SensorInverterTemperature(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterTemperature(coordinator,inverter,inverter_param))
                 case "info":
-                    new_devices.append(SensorInverterInfo(inverter,inverter_param["param"]))
+                    new_devices.append(SensorInverterInfo(coordinator,inverter,inverter_param))
 
-        new_devices.append(SensorInverterBatteryCurrent(inverter))
-        new_devices.append(SensorInverterBatteryPower(inverter))
-        new_devices.append(SensorInverterBatteryPowerCharging(inverter))
-        new_devices.append(SensorInverterBatteryDischarge(inverter))
-        new_devices.append(SensorInverterEnergyToday(inverter))
-        new_devices.append(SensorInverterEnergyTotal(inverter))
+        
+        new_devices.append(SensorInverterBatteryCurrent(coordinator,inverter,[]))
+        new_devices.append(SensorInverterBatteryPower(coordinator,inverter,[]))
+        new_devices.append(SensorInverterBatteryPowerCharging(coordinator,inverter,[]))
+        new_devices.append(SensorInverterBatteryPowerDischarge(coordinator,inverter,[]))
+        
 
-        for func_sensor_name in ['get_mode']:
-            new_devices.append(SensorInverterInfoFunction(inverter,func_sensor_name))
+        available_config_params=inverter.get_available_params('conf')
 
-        cur_time=time.time()
-        if(inverter.last_current_diag_time<cur_time-inverter.last_current_diag_min_interval):
-            inverter.last_current_diag_time=time.time()
-            for diag_sensor_name in ['get_model','get_cpu_firmware_version','get_panel_firmware_version','get_bt_version','get_serial','get_model2']:
-                new_devices.append(SensorInverterDiag(inverter,diag_sensor_name))
-
-        available_conf_params=inverter.get_available_conf_params()
-        for inverter_conf_param in available_conf_params:
-            new_devices.append(SensorInverterConfDiag(inverter,inverter_conf_param["param"]))
+        for inverter_param in available_config_params:
+            inverter_param['diag']=True
+            match inverter_param["sensor"]:
+                case "voltage":
+                    new_devices.append(SensorInverterVoltage(coordinator_diag,inverter,inverter_param))
+                case "current":
+                    new_devices.append(SensorInverterCurrent(coordinator_diag,inverter,inverter_param))
+                case "frequency":
+                    new_devices.append(SensorInverterFrequency(coordinator_diag,inverter,inverter_param))
+                case "power":
+                    new_devices.append(SensorInverterPower(coordinator_diag,inverter,inverter_param))
+                case "energy":
+                    new_devices.append(SensorInverterEnergy(coordinator_diag,inverter,inverter_param))
+                case "energy_total":
+                    new_devices.append(SensorInverterEnergyTotal(coordinator_diag,inverter,inverter_param))
+                case "percent":
+                    new_devices.append(SensorInverterPercent(coordinator_diag,inverter,inverter_param))
+                case "battery":
+                    new_devices.append(SensorInverterBattery(coordinator_diag,inverter,inverter_param))
+                case "temperature":
+                    new_devices.append(SensorInverterTemperature(coordinator_diag,inverter,inverter_param))
+                case "info":
+                    new_devices.append(SensorInverterInfo(coordinator_diag,inverter,inverter_param))
 
     if new_devices:
         async_add_entities(new_devices)
 
 
+class InverterDataCoordinator(DataUpdateCoordinator):
+    """My custom coordinator."""
+
+    def __init__(self, hass, hub, inverter):
+        """Initialize my coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name="Inverter Data Coordinator",
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(seconds=7),
+        )
+        self.hub = hub
+        self.inverter=inverter
+
+    async def _async_update_data(self):
+        """Fetch data from API endpoint.
+
+        This is the place to pre-process the data to lookup tables
+        so entities can quickly look up their data.
+        """
+        try:
+            # Note: asyncio.TimeoutError and aiohttp.ClientError are already
+            # handled by the data update coordinator.
+            async with async_timeout.timeout(30):
+                # Grab active context variables to limit data required to be fetched from API
+                # Note: using context is not required if there is no need or ability to limit
+                # data retrieved from API.
+                listening_idx = set(self.async_contexts())
+                #return await self.hub.fetch_data(listening_idx)
+                return await self.hub.inverter_client.GetInverterDataByCommand('data')
+                
+        except Exception as e:
+            s = str(e)
+            # Raising ConfigEntryAuthFailed will cancel future updates
+            # and start a config flow with SOURCE_REAUTH (async_step_reauth)
+            _LOGGER.error("-------------------- COORDINATOR DATA UPDATE FAILED ----------------" + s)
+            self.inverter.reconnect()
+        
+
+class InverterConfigCoordinator(DataUpdateCoordinator):
+    """My custom coordinator."""
+
+    def __init__(self, hass, hub, inverter):
+        """Initialize my coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            # Name of the data. For logging purposes.
+            name="Inverter Config Coordinator",
+            # Polling interval. Will only be polled if there are subscribers.
+            update_interval=timedelta(seconds=600),
+        )
+        self.hub = hub
+        self.inverter=inverter
+
+    async def _async_update_data(self):
+        """Fetch data from API endpoint.
+
+        This is the place to pre-process the data to lookup tables
+        so entities can quickly look up their data.
+        """
+        try:
+            # Note: asyncio.TimeoutError and aiohttp.ClientError are already
+            # handled by the data update coordinator.
+            async with async_timeout.timeout(30):
+                # Grab active context variables to limit data required to be fetched from API
+                # Note: using context is not required if there is no need or ability to limit
+                # data retrieved from API.
+                listening_idx = set(self.async_contexts())
+                #return await self.hub.fetch_data(listening_idx)
+                return await self.hub.inverter_client.GetInverterDataByCommand('conf')
+                
+        except Exception as e:
+            s = str(e)
+            # Raising ConfigEntryAuthFailed will cancel future updates
+            # and start a config flow with SOURCE_REAUTH (async_step_reauth)
+            _LOGGER.error("-------------------- COORDINATOR DATA UPDATE FAILED ----------------" + s)
+            self.inverter.reconnect()
+
 
 # This base class shows the common properties and methods for a sensor as used in this
 # example. See each sensor for further details about properties and methods that
 # have been overridden.
-class SensorBase(SensorEntity):
-    """Base representation of a inverter Sensor."""
-    #should_poll = False
-    device_class = ""
-    state_class = "" # SensorStateClass.MEASUREMENT
+class SensorBase(CoordinatorEntity, SensorEntity):
+    """An entity using CoordinatorEntity.
 
-    def __init__(self, inverter, param_name):
+    The CoordinatorEntity class provides:
+      should_poll
+      async_update
+      async_added_to_hass
+      available
+
+    """
+    device_class = ""
+    state_class = ""
+
+    def __init__(self, coordinator, inverter, inverter_param):
         """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.hub = coordinator.hub
+        self.inverter_param = inverter_param
         self._inverter = inverter
+        self.param_name=inverter_param['param']
 
     # To link this entity to the cover device, this property must return an
     # identifiers value matching that used in the cover, but no other information such
     # as name. If name is returned, this entity will then also become a device in the
     # HA UI.
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        test =1
+        """
+        #self._attr_is_on = self.coordinator.data[self.idx]["text"]
+        self._attr_is_on = 1
+        self.async_write_ha_state()
+        """
     @property
     def device_info(self):
         """Return information to link this entity with the correct device."""
@@ -124,123 +260,32 @@ class SensorBase(SensorEntity):
         """Return True if inverter and hub is available."""
         return self._inverter.online and self._inverter.hub.online
 
-    async def async_added_to_hass(self):
-        """Run when this Entity has been added to HA."""
-        # Sensors should also register callbacks to HA when their state changes
-        self._inverter.register_callback(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self):
-        """Entity being removed from hass."""
-        # The opposite of async_added_to_hass. Remove any registered call backs here.
-        self._inverter.remove_callback(self.async_write_ha_state)
 
 class SensorInverter(SensorBase):
-    device_class = ""
-    state_class = SensorStateClass.MEASUREMENT
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.sensor_name=param_name
-        self.current_data=self._inverter.get_state_param(param_name)
-        self._attr_unique_id = f"{self._inverter.inverter_id}_{self.current_data['param']}"
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.sensor_name=inverter_param["param"]
+        self._attr_unique_id = f"{self._inverter.inverter_id}_{inverter_param['param']}"
         #self._attr_name = f"{self._inverter.name} {self.current_data['text']}"
-        self._attr_name = f"{self.current_data['text']}"
+        self._attr_name = f"{inverter_param['text']}"
         self._state = 0
-        self._attr_native_unit_of_measurement = self.current_data["unit"]
+        self._attr_native_unit_of_measurement = inverter_param["unit"]
+        if('diag' in inverter_param and inverter_param['diag']==True):
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
+
+    def GetParamDataByName(self, param_name):
+        for data_item in self.coordinator.data:
+            if(data_item['param']==param_name):
+                return data_item
 
     @property
-    def state(self):
-        return self._inverter.get_state_param(self.sensor_name)["value"]
-
-class SensorInverterVoltage(SensorInverter):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.device_class = DEVICE_CLASS_VOLTAGE
-
-class SensorInverterCurrent(SensorInverter):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.device_class = DEVICE_CLASS_CURRENT
-
-class SensorInverterFrequency(SensorInverter):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.device_class = DEVICE_CLASS_FREQUENCY
-
-class SensorInverterPower(SensorInverter):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.device_class = DEVICE_CLASS_POWER
-
-class SensorInverterPercent(SensorInverter):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.device_class = DEVICE_CLASS_POWER
-        self._attr_native_unit_of_measurement = PERCENTAGE
-
-class SensorInverterBattery(SensorInverter):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.device_class = DEVICE_CLASS_BATTERY
-        self._attr_native_unit_of_measurement = PERCENTAGE
-
-class SensorInverterTemperature(SensorInverter):
-    state_class=SensorStateClass.MEASUREMENT
-    device_class = DEVICE_CLASS_TEMPERATURE
-
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-
-class SensorInverterInfo(SensorInverter):
-    state_class=''
-    device_class = ''
-
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-
-
-class SensorInverterByFunctionName(SensorBase):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.param_name=param_name
-        func_inverter = getattr(self._inverter.hub.inverter_client, self.param_name) # get function by param_name from inverter client
-        self.current_data=func_inverter(True)
-        self.sensor_name=self.current_data['param']
-        self._attr_unique_id = f"{self._inverter.inverter_id}_diag_{self.current_data['param']}"
-        self._attr_name = f"{self.current_data['text']}"
-        self._state = 0
-        self._attr_native_unit_of_measurement = self.current_data['unit']
-
-    @property
-    def state(self):
-        func_inverter = getattr(self._inverter.hub.inverter_client, self.param_name) # get function by param_name from inverter client
-        return func_inverter(True)["value"]
-
-class SensorInverterDiag(SensorInverterByFunctionName):
-    entity_category = EntityCategory.DIAGNOSTIC
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-
-
-class SensorInverterInfoFunction(SensorInverterByFunctionName):
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-
-
-class SensorInverterConfDiag(SensorBase):
-    entity_category = EntityCategory.DIAGNOSTIC
-    def __init__(self, inverter, param_name):
-        super().__init__(inverter, param_name)
-        self.param_name=param_name
-        self.current_data=self._inverter.get_conf_param(param_name)
-        self._attr_unique_id = f"{self._inverter.inverter_id}_diag_{self.current_data['param']}"
-        self._attr_name = f"{self.current_data['text']}"
-        self.sensor_name=self.current_data['param']
-        self._state = 0
-        self._attr_native_unit_of_measurement = self.current_data['unit']
-
-    @property
-    def state(self):
-        return self._inverter.get_conf_param(self.sensor_name)["value"]
+    def state(self) :
+        return self.GetParamDataByName(self.sensor_name)["value"]
 
     @property
     def entity_registry_enabled_default(self) -> bool:
@@ -251,98 +296,117 @@ class SensorInverterConfDiag(SensorBase):
             return False
         return True
 
-class SensorInverterBatteryCurrent(SensorBase):
+class SensorInverterVoltage(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_VOLTAGE
+
+class SensorInverterCurrent(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_CURRENT
+
+class SensorInverterFrequency(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_FREQUENCY
+
+class SensorInverterPower(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_POWER
+
+class SensorInverterPercent(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_POWER
+        self._attr_native_unit_of_measurement = PERCENTAGE
+
+class SensorInverterBattery(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_BATTERY
+        self._attr_native_unit_of_measurement = PERCENTAGE
+
+class SensorInverterTemperature(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = DEVICE_CLASS_TEMPERATURE
+
+class SensorInverterInfo(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+
+class SensorInverterEnergy(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = SensorDeviceClass.ENERGY
+
+class SensorInverterEnergyTotal(SensorInverter):
+    def __init__(self, coordinator, inverter, inverter_param):
+        super().__init__(coordinator, inverter, inverter_param)
+        self.state_class = SensorStateClass.MEASUREMENT
+        self.device_class = SensorDeviceClass.ENERGY
+        #self.state_class = SensorStateClass.TOTAL_INCREASING # usefull, but untill we solve problem with processing incoming data with zerovalues TOTAL_INCREASING will lead to incorrect data aggregation on HA side
+        self.state_class = SensorStateClass.TOTAL
+
+
+class SensorInverterBatteryCurrent(SensorInverter):
     device_class = DEVICE_CLASS_CURRENT
     state_class=SensorStateClass.MEASUREMENT
 
-    def __init__(self, inverter, param_name='battery_current'):
-        super().__init__(inverter, param_name)
-        self.sensor_name=param_name
-        self.current_data=[]
+    def __init__(self, coordinator, inverter, inverter_param):
+        inverter_param={'param':'battery_current','text':'Battery current','unit':'A'}
+        super().__init__(coordinator, inverter, inverter_param)
         self._attr_unique_id = f"{self._inverter.inverter_id}_{self.sensor_name}"
-        #self._attr_name = f"{self._inverter.name} Battery current"
-        self._attr_name = f"Battery current"
         self._state = 0
-        self._attr_native_unit_of_measurement = self._inverter.get_state_param('battery_charging_current')["unit"]
 
     @property
     def state(self):
-        return self._inverter.get_state_param('battery_charging_current')["value"] - self._inverter.get_state_param('battery_discharge_current')["value"]
+        return self.GetParamDataByName('battery_charging_current')["value"] - self.GetParamDataByName('battery_discharge_current')["value"]
 
-class SensorInverterBatteryPower(SensorBase):
+class SensorInverterBatteryPower(SensorInverter):
     device_class = DEVICE_CLASS_POWER
     state_class=SensorStateClass.MEASUREMENT
 
-    def __init__(self, inverter, param_name='battery_power'):
-        super().__init__(inverter, param_name)
-        self.sensor_name=param_name
-        self.current_data=[]
+    def __init__(self, coordinator, inverter, inverter_param):
+        inverter_param={'param':'battery_power','text':'Battery power','unit':'W'}
+        super().__init__(coordinator, inverter, inverter_param)
         self._attr_unique_id = f"{self._inverter.inverter_id}_{self.sensor_name}"
-        #self._attr_name = f"{self._inverter.name} Battery Power"
-        self._attr_name = f"Battery Power"
         self._state = 0
-        self._attr_native_unit_of_measurement = 'W'
 
     @property
     def state(self):
-        return (self._inverter.get_state_param('battery_charging_current')["value"] - self._inverter.get_state_param('battery_discharge_current')["value"]) * self._inverter.get_state_param('battery_voltage')["value"]
+        return (self.GetParamDataByName('battery_charging_current')["value"] - self.GetParamDataByName('battery_discharge_current')["value"]) * self.GetParamDataByName('battery_voltage')["value"]
 
-
-class SensorInverterBatteryPowerCharging(SensorInverterBatteryPower):
-    def __init__(self, inverter, param_name='battery_power_charging'):
-        super().__init__(inverter, param_name)
-        self._attr_name = f"Battery Power Charging"
+class SensorInverterBatteryPowerCharging(SensorInverter):
+    device_class = DEVICE_CLASS_POWER
+    state_class=SensorStateClass.MEASUREMENT
+    def __init__(self, coordinator, inverter, inverter_param):
+        inverter_param={'param':'battery_power_charging','text':'Battery Power Charging','unit':'W'}
+        super().__init__(coordinator, inverter, inverter_param)
 
     @property
     def state(self):
-        return self._inverter.get_state_param('battery_charging_current')["value"] * self._inverter.get_state_param('battery_voltage')["value"]
+        return self.GetParamDataByName('battery_charging_current')["value"] * self.GetParamDataByName('battery_voltage')["value"]
     
-class SensorInverterBatteryDischarge(SensorInverterBatteryPower):
-    def __init__(self, inverter, param_name='battery_power_discharge'):
-        super().__init__(inverter, param_name)
-        self._attr_name = f"Battery Power Discharge"
+class SensorInverterBatteryPowerDischarge(SensorInverter):
+    device_class = DEVICE_CLASS_POWER
+    state_class=SensorStateClass.MEASUREMENT
+    def __init__(self, coordinator, inverter, inverter_param):
+        inverter_param={'param':'battery_power_discharge','text':'Battery Power Discharge','unit':'W'}
+        super().__init__(coordinator, inverter, inverter_param)
 
     @property
     def state(self):
-        return self._inverter.get_state_param('battery_discharge_current')["value"] * self._inverter.get_state_param('battery_voltage')["value"]    
-
-class SensorInverterEnergyToday(SensorBase):
-    device_class = SensorDeviceClass.ENERGY
-    state_class = SensorStateClass.TOTAL_INCREASING
-
-    def __init__(self, inverter, param_name='total_energy_today'):
-        super().__init__(inverter, param_name)
-        self.sensor_name=param_name
-        self.current_data=self._inverter.hub.inverter_client.get_energy_today()
-        self._attr_unique_id = f"{self._inverter.inverter_id}_{self.current_data['param']}"
-        #self._attr_name = f"{self._inverter.name} {self.current_data['text']}"
-        self._attr_name = f"{self.current_data['text']}"
-        self._state = 0
-        self._attr_native_unit_of_measurement = self.current_data['unit']
-        #self.last_reset=self.current_data['last_reset']
-
-    @property
-    def state(self):
-        #self.last_reset=self.current_data['last_reset']
-        return self._inverter.hub.inverter_client.get_energy_today()["value"]
-
-
-class SensorInverterEnergyTotal(SensorBase):
-    device_class = SensorDeviceClass.ENERGY
-    #state_class = SensorStateClass.TOTAL_INCREASING # usefull, but untill we solve problem with processing incoming data with zerovalues TOTAL_INCREASING will lead to incorrect data aggregation on HA side
-    state_class = SensorStateClass.TOTAL
-
-    def __init__(self, inverter, param_name='total_output_load_energy'):
-        super().__init__(inverter, param_name)
-        self.sensor_name=param_name
-        self.current_data=self._inverter.hub.inverter_client.get_energy_total()
-        self._attr_unique_id = f"{self._inverter.inverter_id}_{self.current_data['param']}"
-        #self._attr_name = f"{self._inverter.name} {self.current_data['text']}"
-        self._attr_name = f"{self.current_data['text']}"
-        self._state = 0
-        self._attr_native_unit_of_measurement = self.current_data['unit']
-
-    @property
-    def state(self):
-        return self._inverter.hub.inverter_client.get_energy_total()["value"]
+        return self.GetParamDataByName('battery_discharge_current')["value"] * self.GetParamDataByName('battery_voltage')["value"]    
 

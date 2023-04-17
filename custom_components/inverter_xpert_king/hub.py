@@ -24,9 +24,10 @@ class Hub:
         self._port = port
         self._hass = hass
         self.inverter_client=InverterClient(host,port)
+        self.inverter_client.connect()
         self._name = "Inverter " + host
         self._id = host.lower()
-        self.manufacturer=self.inverter_client.get_model2()
+        self.manufacturer=self.inverter_client.manufacturer
         self.inverters = [
             Inverter(f"{self._id}_1", f"{self._name}", self),
             #Inverter(f"{self._id}_2", f"{self._name} 2", self),
@@ -39,10 +40,10 @@ class Hub:
         """ID for hub."""
         return self._id
 
-    async def test_connection(self) -> bool:
-        """Test connectivity with inverter"""
-        #await asyncio.sleep(1)
-        return self.inverter_client.get_mode()
+    #async def test_connection(self) -> bool:
+    #    """Test connectivity with inverter"""
+    #    #await asyncio.sleep(1)
+    #    return self.inverter_client.get_mode()
 
 
 class Inverter:
@@ -55,21 +56,9 @@ class Inverter:
         self.name = name
         self._callbacks = set()
         self._loop = asyncio.get_event_loop()
-        self.model=self.hub.inverter_client.get_model()
-        self.firmware_version=self.hub.inverter_client.get_cpu_firmware_version() + ' / ' + self.hub.inverter_client.get_panel_firmware_version()
-        self.last_current_state_min_interval=1 # min allowed interval in seconds
-        self.last_current_state=[]
-        self.last_current_state_time=0
-        
-        self.last_current_conf_min_interval=600 # min allowed interval in seconds
-        self.last_current_conf_time=0
-        self.last_current_conf=[]
 
-        self.last_current_diag_min_interval=600 # min allowed interval in seconds
-        self.last_current_diag_time=0
-
-        self.update_data()
-        self.update_conf_data()
+        self.model=self.hub.inverter_client.model
+        self.firmware_version=self.hub.inverter_client.firmware_version
 
     @property
     def inverter_id(self) -> str:
@@ -117,50 +106,14 @@ class Inverter:
         for callback in self._callbacks:
             callback()
 
-    def update_data(self):
-        cur_time=time.time()
-        if(self.last_current_state_time<cur_time-self.last_current_state_min_interval):
-            self.last_current_state_time=time.time()
-            self.last_current_state=self.hub.inverter_client.get_current_state()
-            self.update_conf_data()
-            
-    def update_conf_data(self):
-        cur_time=time.time()
-        if(self.last_current_conf_time<cur_time-self.last_current_conf_min_interval):
-            self.last_current_conf_time=time.time()
-            self.last_current_conf=self.hub.inverter_client.get_current_conf()
-
-    def get_state_param(self,param):
-        for val in self.last_current_state:
-            if(val['param'] == param):
-                return val
-
-    def get_available_params(self):
-        res=[]
-        for val in self.last_current_state:
-            res.append({'param':val['param'],'sensor':val['sensor']})
-        return res
-    
-    def get_conf_param(self,param):
-        for val in self.last_current_conf:
-            if(val['param'] == param):
-                return val
-
-    def get_available_conf_params(self):
-        res=[]
-        for val in self.last_current_conf:
-            res.append({'param':val['param'],'sensor':val['sensor']})
-        return res
+    def get_available_params(self, data_type):
+        return self.hub.inverter_client.GetInverterDataByCommandSync(data_type)
 
     @property
     def online(self) -> float:
         """Inverter is online."""
         #  Returns True if online,
         # False if offline.
-        self.update_data()
+        #self.update_data()
         return self.hub.inverter_client.connected
-
-    @property
-    def battery_level(self) -> int:
-        return self.get_state_param('battery_capacity')
 
