@@ -344,7 +344,6 @@ class SensorInverterTemperature(SensorInverter):
 class SensorInverterInfo(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
-        self.state_class = SensorStateClass.MEASUREMENT
 
 class SensorInverterEnergy(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
