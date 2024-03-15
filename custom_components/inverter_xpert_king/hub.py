@@ -40,10 +40,10 @@ class Hub:
         """ID for hub."""
         return self._id
 
-    #async def test_connection(self) -> bool:
-    #    """Test connectivity with inverter"""
-    #    #await asyncio.sleep(1)
-    #    return self.inverter_client.get_mode()
+    async def test_connection(self) -> bool:
+        """Test connectivity with inverter"""
+        #await asyncio.sleep(1)
+        return self.inverter_client.get_mode()
 
 
 class Inverter:
