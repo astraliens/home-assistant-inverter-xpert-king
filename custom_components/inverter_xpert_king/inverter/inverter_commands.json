@@ -638,6 +638,7 @@
   "QET": {
     "0": {
       "name": "total_pv_generated_energy",
+      "text": "Total PV generated energy",
       "type": "int",
       "unit": "Wh",
       "sensor": "energy_total"
