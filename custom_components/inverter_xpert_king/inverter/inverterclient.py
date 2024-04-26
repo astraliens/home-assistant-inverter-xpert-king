@@ -164,11 +164,15 @@ class InverterClient:
                field_val=inverter_data[index]
                parsed_array_val=self.parse_params_string_binary(field_val, command_params[index_str]['complex_params']['params'])               
 
+              case 'assoc_value':
+               field_val=inverter_data[index]
+               parsed_array_val=self.parse_params_assoc_value(field_val, command_params[index_str]['complex_params']['params'])               
+
               case _:
                field_val=inverter_data[index]
 
           match field_type:
-            case 'string_binary':
+            case 'string_binary' | 'assoc_value':
                for index_parsed in range(len(parsed_array_val)):
                    
                     parsed_item=parsed_array_val[index_parsed]
@@ -207,7 +211,27 @@ class InverterClient:
             })
         return res
 
-    
+    def parse_params_assoc_value(self,params,param_conf):
+        assoc_value=params
+        res=[]
+        
+        assoc_data=param_conf[0]
+        assoc_list=assoc_data['value']
+        if assoc_value in assoc_list:
+            assoc_result=assoc_list[assoc_value]
+        else:
+            assoc_result=assoc_value
+        
+        res.append({
+            'name': assoc_data['name'],
+            'text': assoc_data['text'],
+            'value': assoc_result,
+            'value_orig': assoc_value,
+            'sensor': assoc_data['sensor']
+        })
+
+        return res
+
     def get_data_single_param(self,command):
         inverter_data=self.get_data(command)
         received_data=self.process_data(command,inverter_data)

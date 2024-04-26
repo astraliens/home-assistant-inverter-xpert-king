@@ -283,9 +283,64 @@
   "QGMN": {
     "0": {
       "name": "model_general",
-      "text": "Model (general)",
-      "type": "string",
-      "sensor": "info"
+      "type": "assoc_value",
+      "complex_params": {
+        "type": "binary",
+        "params": [
+          {
+            "name": "model_general",
+            "text": "Model (general)",
+            "value": {
+              "001": "VP-5000",
+              "002": "VM-5000",
+              "003": "VP-3000",
+              "004": "VM-3000",
+              "005": "MKS+-2000-48-LV-LY",
+              "006": "Axpert MLV 3K-24",
+              "007": "Axpert PLV 3K-24",
+              "008": "Axpert MKS 3KP (MKS HV 24V 3KVA)",
+              "009": "Axpert KS 3KP (KS HV 24V 3KVA)",
+              "010": "Axpert MKS 5KP (MKS HV 24V 5KVA)",
+              "011": "Axpert KS 5KP (KS HV 24V 5KVA)",
+              "012": "Axpert MKS 4K/5K 64VDC (MKS HV 48V 4K/5KVA/64V)",
+              "013": "Axpert KS 4K/5K 64VDC (KS HV 48V 4/5KVA/64V)",
+              "014": "Axpert MKS 4K/5K (Axpert MKS 4/5KVA)",
+              "015": "Axpert KS 4/5KVA",
+              "016": "ALFA M-5000",
+              "017": "ALFA P-5000",
+              "018": "Axpert Plus Duo/Tri 5KVA",
+              "019": "Axpert EPS 5KW (EPS 5KVA)",
+              "020": "Axpert EPS M-5KW (EPS M5K)",
+              "021": "Axpert EPS 33-5KW (EPS 3/3 5KW)",
+              "022": "AXPERT MKS II 5KW",
+              "023": "AXPERT KING 5KW",
+              "024": "AXPERT KING 3KW",
+              "025": "AXPERT MKS II 5KW (APT MKS II 5KW(Feed-in grid function))",
+              "026": "Axpert MLV 5KW-48V (Axpert MLV 5KW)",
+              "027": "AXPERT VMIII",
+              "028": "AXPERT VMIII (APT VMIII 3.2KW (Feed-in grid function))",
+              "029": "AXPERT VMII",
+              "030": "AXPERT VMII (Fusion VMII (Feed-in grid function))",
+              "031": "AXPERT MKS II 5KW (Phocos MKS II 5KW(Discharge current time function))",
+              "032": "Axpert MKS (Zero LV 0.7KW)",
+              "033": "Axpert MKS (Zero LV 1.4KW)",
+              "034": "Axpert MKS (Zero LV 2.6KW)",
+              "035": "AXPERT KING 5KW (Query PV generated and output load energy)",
+              "036": "AXPERT KING 3KW (Query PV generated and output load energy)",
+              "037": "AXPERT VMIII (Query PV generated and output load energy)",
+              "038": "AXPERT MKS II 5KW (Phocos MKS II 5KW (Discharge current time function) (Query PV generated and output load energy))",
+              "039": "AXPERT MKS II 5KW LV (Phocos MKS II 5KW LV (Discharge current time function))",
+              "040": "Axpert SE 3.5K",
+              "041": "Axpert SE 5.5K",
+              "042": "AXPERT MKS III 5KW",
+              "043": "MAX3.6K",
+              "044": "MAX7.2K",
+              "045": "MAX5K LV"
+            },
+            "sensor": "info"
+          }
+        ]
+      }
     }
   },
   "QMOD": {
@@ -350,8 +405,7 @@
       "name": "ac_output_rating_frequency",
       "text": "AC output rating frequency",
       "type": "float",
-      "unit": "Hz"
-      ,
+      "unit": "Hz",
       "sensor": "frequency"
     },
     "4": {
