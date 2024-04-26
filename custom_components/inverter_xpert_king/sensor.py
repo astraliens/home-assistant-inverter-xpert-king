@@ -9,15 +9,7 @@ import random
 
 from homeassistant.const import (
     ATTR_VOLTAGE,
-    DEVICE_CLASS_BATTERY,
     PERCENTAGE,
-    DEVICE_CLASS_CURRENT,
-    DEVICE_CLASS_ENERGY,
-    DEVICE_CLASS_FREQUENCY,
-    DEVICE_CLASS_POWER_FACTOR,
-    DEVICE_CLASS_POWER,
-    DEVICE_CLASS_TEMPERATURE,
-    DEVICE_CLASS_VOLTAGE,
     EntityCategory
 )
 from homeassistant.helpers.entity import Entity
@@ -32,8 +24,6 @@ from homeassistant.components.sensor import (
 from .const import DOMAIN
 from datetime import timedelta
 import time
-
-from homeassistant.components.sensor import STATE_CLASS_TOTAL_INCREASING
 
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -301,45 +291,45 @@ class SensorInverterVoltage(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_VOLTAGE
+        self.device_class = SensorDeviceClass.VOLTAGE
 
 class SensorInverterCurrent(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_CURRENT
+        self.device_class = SensorDeviceClass.CURRENT
 
 class SensorInverterFrequency(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_FREQUENCY
+        self.device_class = SensorDeviceClass.FREQUENCY
 
 class SensorInverterPower(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_POWER
+        self.device_class = SensorDeviceClass.POWER
 
 class SensorInverterPercent(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_POWER
+        self.device_class = SensorDeviceClass.POWER
         self._attr_native_unit_of_measurement = PERCENTAGE
 
 class SensorInverterBattery(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_BATTERY
+        self.device_class = SensorDeviceClass.BATTERY
         self._attr_native_unit_of_measurement = PERCENTAGE
 
 class SensorInverterTemperature(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.state_class = SensorStateClass.MEASUREMENT
-        self.device_class = DEVICE_CLASS_TEMPERATURE
+        self.device_class = SensorDeviceClass.TEMPERATURE
 
 class SensorInverterInfo(SensorInverter):
     def __init__(self, coordinator, inverter, inverter_param):
@@ -361,7 +351,7 @@ class SensorInverterEnergyTotal(SensorInverter):
 
 
 class SensorInverterBatteryCurrent(SensorInverter):
-    device_class = DEVICE_CLASS_CURRENT
+    device_class = SensorDeviceClass.CURRENT
     state_class=SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, inverter, inverter_param):
@@ -375,7 +365,7 @@ class SensorInverterBatteryCurrent(SensorInverter):
         return self.GetParamDataByName('battery_charging_current')["value"] - self.GetParamDataByName('battery_discharge_current')["value"]
 
 class SensorInverterBatteryPower(SensorInverter):
-    device_class = DEVICE_CLASS_POWER
+    device_class = SensorDeviceClass.POWER
     state_class=SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, inverter, inverter_param):
@@ -389,7 +379,7 @@ class SensorInverterBatteryPower(SensorInverter):
         return (self.GetParamDataByName('battery_charging_current')["value"] - self.GetParamDataByName('battery_discharge_current')["value"]) * self.GetParamDataByName('battery_voltage')["value"]
 
 class SensorInverterBatteryPowerCharging(SensorInverter):
-    device_class = DEVICE_CLASS_POWER
+    device_class = SensorDeviceClass.POWER
     state_class=SensorStateClass.MEASUREMENT
     def __init__(self, coordinator, inverter, inverter_param):
         inverter_param={'param':'battery_power_charging','text':'Battery Power Charging','unit':'W'}
@@ -400,7 +390,7 @@ class SensorInverterBatteryPowerCharging(SensorInverter):
         return self.GetParamDataByName('battery_charging_current')["value"] * self.GetParamDataByName('battery_voltage')["value"]
     
 class SensorInverterBatteryPowerDischarge(SensorInverter):
-    device_class = DEVICE_CLASS_POWER
+    device_class = SensorDeviceClass.POWER
     state_class=SensorStateClass.MEASUREMENT
     def __init__(self, coordinator, inverter, inverter_param):
         inverter_param={'param':'battery_power_discharge','text':'Battery Power Discharge','unit':'W'}
