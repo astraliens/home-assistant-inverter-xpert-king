@@ -272,6 +272,29 @@
       "sensor": "current"
     }
   },
+  "QPIGS2": {
+    "0": {
+      "name": "pv2_input_current",
+      "text": "PV2 input current",
+      "type": "int",
+      "unit": "A",
+      "sensor": "current"
+    },
+    "1": {
+      "name": "pv2_input_voltage",
+      "text": "PV2 input voltage",
+      "type": "float",
+      "unit": "V",
+      "sensor": "voltage"
+    },
+    "2": {
+      "name": "pv2_charging_power",
+      "text": "PV2 charging power",
+      "type": "int",
+      "unit": "W",
+      "sensor": "power"
+    }
+  },
   "QID": {
     "0": {
       "name": "serial",

@@ -91,7 +91,7 @@ class InverterClient:
     def GetCommandByType(self,command_type):
         command_data=self.GetCommandList()
         command_list={
-               'data':['QPIGS','QMOD','QPIWS','QFLAG','QET','QLT','QLD'],
+               'data':['QPIGS','QMOD','QPIWS','QFLAG','QET','QLT','QLD','QPIGS2'],
                'conf':['QID','QGMN','QPIRI','QVFW','QVFW3','QVFW2','QMN']
         }
 
