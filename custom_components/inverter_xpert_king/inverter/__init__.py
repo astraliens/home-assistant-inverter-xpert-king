@@ -1,1 +1,1 @@
-"""The example sensor integration."""
+"""Inverter client package: transport, protocol and CRC helpers."""

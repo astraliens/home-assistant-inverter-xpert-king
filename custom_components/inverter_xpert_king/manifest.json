@@ -3,13 +3,11 @@
   "name": "Inverter Xpert King",
   "codeowners": ["@astraliens"],
   "config_flow": true,
-  "dependencies": [],
   "documentation": "https://github.com/astraliens/home-assistant-inverter-xpert-king",
-  "issue_tracker": "https://github.com/astraliens/home-assistant-inverter-xpert-king/issues",
-  "homekit": {},
+  "homeassistant": "2024.4.0",
+  "integration_type": "device",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/astraliens/home-assistant-inverter-xpert-king/issues",
   "requirements": [],
-  "ssdp": [],
-  "version": "0.1.5",
-  "zeroconf": []
+  "version": "0.2.0"
 }

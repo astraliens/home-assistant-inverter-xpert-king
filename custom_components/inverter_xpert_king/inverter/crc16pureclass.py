@@ -19,11 +19,6 @@
 #
 ##############################################################################
 
-class InverterData2:
-    def get_commands(self):
-      return 1
-
-
 class CRC16Calc:
     def get_table(self):
       # table for calculating CRC

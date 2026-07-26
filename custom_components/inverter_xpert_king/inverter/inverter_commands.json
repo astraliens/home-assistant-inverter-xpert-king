@@ -33,7 +33,7 @@
       "text": "AC output apparent power",
       "type": "int",
       "unit": "VA",
-      "sensor": "power"
+      "sensor": "apparent_power"
     },
     "5": {
       "name": "ac_output_active_power",
@@ -443,7 +443,7 @@
       "text": "AC output rating apparent power",
       "type": "int",
       "unit": "VA",
-      "sensor": "power"
+      "sensor": "apparent_power"
     },
     "6": {
       "name": "ac_output_rating_active_power",

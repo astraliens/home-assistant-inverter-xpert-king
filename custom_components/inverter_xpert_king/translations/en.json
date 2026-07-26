@@ -1,22 +1,45 @@
 {
-    "config": {
-        "abort": {
-            "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+  "config": {
+    "step": {
+      "user": {
+        "title": "Inverter Xpert King",
+        "description": "Connect to the inverter via RS232-TCP gateway.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
         },
-        "error": {
-            "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-            "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-            "unknown": "[%key:common::config_flow::error::unknown%]"
-        },
-        "step": {
-            "user": {
-                "data": {
-                    "host": "Inverter IP",
-                    "port": "Inverter Port",
-                    "password": "[%key:common::config_flow::data::password%]",
-                    "username": "[%key:common::config_flow::data::username%]"
-                }
-            }
+        "data_description": {
+          "host": "IP address or hostname of the RS232-TCP gateway.",
+          "port": "TCP port of RS232-TCP gateway."
         }
-   }
+      },
+      "reconfigure": {
+        "title": "Update connection",
+        "description": "Point the integration at a new gateway address.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the RS232-TCP gateway.",
+          "port": "TCP port of RS232-TCP gateway."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the inverter gateway.",
+      "invalid_host": "Host cannot be empty or contain spaces.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "reconfigure_successful": "Re-configuration was successful"
+    }
+  },
+  "issues": {
+    "migration_id_collision": {
+      "title": "Inverter identity migration is waiting on a duplicate",
+      "description": "{title}: {reason}. The integration keeps running on its previous identifiers - entities, history and automations are unaffected. Remove or rename the duplicate under Settings > Devices & services > Entities (or Devices), then restart Home Assistant to finish the migration."
+    }
+  }
 }

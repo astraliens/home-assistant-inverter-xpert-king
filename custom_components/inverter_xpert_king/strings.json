@@ -2,21 +2,44 @@
   "config": {
     "step": {
       "user": {
+        "title": "Inverter Xpert King",
+        "description": "Connect to the inverter via RS232-TCP gateway.",
         "data": {
           "host": "[%key:common::config_flow::data::host%]",
           "port": "[%key:common::config_flow::data::port%]"
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the RS232-TCP gateway.",
+          "port": "TCP port of RS232-TCP gateway."
+        }
+      },
+      "reconfigure": {
+        "title": "Update connection",
+        "description": "Point the integration at a new gateway address.",
+        "data": {
+          "host": "[%key:common::config_flow::data::host%]",
+          "port": "[%key:common::config_flow::data::port%]"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the RS232-TCP gateway.",
+          "port": "TCP port of RS232-TCP gateway."
         }
       }
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "invalid_host": "Host cannot be empty or contain spaces.",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+    }
+  },
+  "issues": {
+    "migration_id_collision": {
+      "title": "Inverter identity migration is waiting on a duplicate",
+      "description": "{title}: {reason}. The integration keeps running on its previous identifiers - entities, history and automations are unaffected. Remove or rename the duplicate under Settings > Devices & services > Entities (or Devices), then restart Home Assistant to finish the migration."
     }
   }
 }
