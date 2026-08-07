@@ -139,7 +139,7 @@
           },
           {
             "name": "scc_firmware_version",
-            "text": "SCC firmware version",
+            "text": "SCC firmware changed",
             "value": {
               "0": "Unchanged",
               "1": "Updated"
@@ -398,8 +398,9 @@
   "QPIWS": {
     "0": {
       "name": "warning_status",
+      "text": "Warning status",
       "type": "string",
-      "sensor": "info"
+      "sensor": "warning_status"
     }
   },
   "QPIRI": {
@@ -461,7 +462,7 @@
     },
     "8": {
       "name": "battery_recharge_voltage",
-      "text": "Battery recharge voltage",
+      "text": "Back to grid voltage",
       "type": "float",
       "unit": "V",
       "sensor": "voltage"
@@ -499,9 +500,9 @@
             "value": {
               "0": "AGM",
               "1": "Flooded",
-              "2": "User",
+              "2": "User define",
               "3": "Pylon",
-              "4": "Undefined",
+              "4": "Shinheung",
               "5": "Weco",
               "6": "Soltaro",
               "7": "Undefined",
@@ -574,10 +575,10 @@
             "name": "charger_source_priority",
             "text": "Charger source priority",
             "value": {
-              "0": "SBL UCB",
-              "1": "SBL UDC",
-              "2": "SLB UCB",
-              "3": "SLB UDC"
+              "0": "SBL/UCB (Solar to battery, grid may charge)",
+              "1": "SBL/UDC (Solar to battery, no grid charge)",
+              "2": "SLB/UCB (Solar to load, grid may charge)",
+              "3": "SLB/UDC (Solar to load, no grid charge)"
             },
             "sensor": "info"
           }
@@ -622,7 +623,7 @@
     },
     "22": {
       "name": "battery_redischarge_voltage",
-      "text": "Battery redischarge voltage",
+      "text": "Back to discharge voltage",
       "type": "float",
       "unit": "V",
       "sensor": "voltage"
@@ -684,7 +685,7 @@
   "QVFW3": {
     "0": {
       "name": "remote_panel_firmware",
-      "text": "Remote panel firmware",
+      "text": "SCC CPU2 firmware",
       "type": "string",
       "sensor": "info"
     }
@@ -692,7 +693,15 @@
   "QVFW2": {
     "0": {
       "name": "bluetooth_version_inquiry",
-      "text": "Bluetooth version",
+      "text": "SCC CPU1 firmware",
+      "type": "string",
+      "sensor": "info"
+    }
+  },
+  "VERFW:": {
+    "0": {
+      "name": "ble_cpu_firmware",
+      "text": "Bluetooth CPU firmware",
       "type": "string",
       "sensor": "info"
     }
@@ -700,8 +709,9 @@
   "QFLAG": {
     "0": {
       "name": "flag_status",
+      "text": "Flag status",
       "type": "string",
-      "sensor": "info"
+      "sensor": "flag_status"
     }
   },
   "QMN": {

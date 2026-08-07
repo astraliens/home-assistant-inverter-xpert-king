@@ -28,3 +28,17 @@ CONF_LEGACY_DEVICE_KEY = "legacy_device_key"
 # unsupported rather than just a bad poll. See FieldAbsenceTracker in
 # sensor.py for both.
 ORPHAN_ABSENCE_THRESHOLD = 3
+
+# How far the clock QT reads back may drift from the time we asked DAT to
+# set before a sync counts as failed. Covers the round trip between the
+# two requests, not clock quality - QT is read immediately after DAT
+# replies, so a device with a working RTC should land well inside this.
+TIME_SYNC_TOLERANCE_SECONDS = 5
+
+# Integration option gating the output/battery setting controls that can
+# hurt the battery or drop the load if misclicked. Defaults to off; the
+# select/number platforms create nothing under this gate until it is
+# turned on, and existing registry entries are disabled rather than
+# removed while it stays off.
+CONF_ADVANCED_SETTINGS = "advanced_settings"
+DEFAULT_ADVANCED_SETTINGS = False

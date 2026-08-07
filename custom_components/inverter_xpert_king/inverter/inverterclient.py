@@ -45,6 +45,13 @@ def _produced_field_names(field_conf) -> list[str]:
     return [name] if name else []
 
 
+def wire_decimal_places(raw: str) -> int:
+    """Digits after the decimal point in a protocol field token, else 0."""
+    if "." not in raw:
+        return 0
+    return len(raw.split(".", 1)[1])
+
+
 def escape_crc_bytes(crc_int):
     """Apply the wire CRC escaping rule to a computed CRC16 value."""
     hi = (crc_int >> 8) & 0xFF
@@ -67,6 +74,8 @@ class InverterClient:
         self.cpu_firmware = ''
         self.panel_firmware = ''
         self.bt_firmware = ''
+        # Bluetooth CPU from VERFW: — separate from bt_firmware (QVFW2 / SCC1).
+        self.ble_firmware = ''
 
         self._command_defs = None
         self.crc_mismatch_count = 0
@@ -91,12 +100,23 @@ class InverterClient:
         self._last_stale_frame_log = 0.0
 
     def connect(self):
+        # Keep an already-open socket. Opening another would orphan the
+        # descriptor currently held in client_socket.
+        if self.connected and getattr(self, "client_socket", None) is not None:
+            return 1
+
+        sock = None
         try:
             sock = socket.socket()
             sock.settimeout(SOCKET_TIMEOUT)
             sock.connect((self.device_ip, self.device_port))
         except OSError as exc:
             _LOGGER.debug("Connect to %s:%s failed: %s", self.device_ip, self.device_port, exc)
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
             self.connected = False
             return 0
 
@@ -111,12 +131,14 @@ class InverterClient:
     def _read_identity(self):
         """Read model/firmware right after connect. Never raises, and each
         field is read on its own: a device refusing one command (QVFW2 is
-        KING-only and NAKs on other models) must not cost the others."""
+        KING-only and NAKs on other models; VERFW: is absent on most of
+        the family) must not cost the others."""
         self.model_general = self._read_identity_field(self.get_model2)
         self.model = self._read_identity_field(self.get_model)
         self.cpu_firmware = self._read_identity_field(self.get_cpu_firmware_version)
         self.panel_firmware = self._read_identity_field(self.get_panel_firmware_version)
         self.bt_firmware = self._read_identity_field(self.get_bt_version)
+        self.ble_firmware = self._read_identity_field(self.get_ble_firmware_version)
 
     def _read_identity_field(self, getter):
         try:
@@ -309,7 +331,7 @@ class InverterClient:
         data_array = text.split(' ', last_index) if last_field_type == 'string' else text.split(' ')
 
         match command:
-            case "QVFW" | "QVFW3":
+            case "QVFW" | "QVFW3" | "VERFW:" | "VERFW":
               data_array[0] = data_array[0].replace("VERFW:", "")
             case "QVFW2":
               data_array[0] = data_array[0].replace("VERFW2:", "")
@@ -328,7 +350,7 @@ class InverterClient:
         command_data=self.GetCommandList()
         command_list={
                'data':['QPIGS','QMOD','QPIWS','QFLAG','QET','QLT','QLD','QPIGS2'],
-               'conf':['QID','QGMN','QPIRI','QVFW','QVFW3','QVFW2','QMN']
+               'conf':['QID','QGMN','QPIRI','QVFW','QVFW3','QVFW2','VERFW:','QMN']
         }
 
         command_result={}
@@ -383,16 +405,20 @@ class InverterClient:
                 field_sensor = field_conf.get('sensor', '')
                 field_text = field_conf.get('text', field_name)
 
+                decimals = None
                 match field_type:
                     case "int":
                         field_val=int(inverter_data[index])
                         if 'multiplier' in field_conf:
                             field_val=field_val*field_conf['multiplier']
+                        decimals = 0
 
                     case "float":
-                        field_val=float(inverter_data[index])
+                        raw_token = inverter_data[index]
+                        field_val=float(raw_token)
                         if 'multiplier' in field_conf:
                             field_val=field_val*field_conf['multiplier']
+                        decimals = wire_decimal_places(raw_token)
 
                     case "string":
                         field_val=inverter_data[index]
@@ -421,7 +447,17 @@ class InverterClient:
                             })
 
                     case _:
-                        res.append({'param':field_name,'value':field_val, 'unit':field_unit,'command':command, 'sensor':field_sensor, 'text':field_text})
+                        item = {
+                            'param': field_name,
+                            'value': field_val,
+                            'unit': field_unit,
+                            'command': command,
+                            'sensor': field_sensor,
+                            'text': field_text,
+                        }
+                        if decimals is not None:
+                            item['decimals'] = decimals
+                        res.append(item)
 
             except Exception as exc:
                 # A field that arrived but failed to parse is a genuine
@@ -499,91 +535,101 @@ class InverterClient:
         received_data=self.process_data(command,inverter_data)
         return received_data[0]
     
-    def get_serial(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QID')
-        else:
-            return self.get_data_single_param('QID')
+    def get_serial(self, full=False):
+        # `full` is always a bool flag (default False); callers never pass
+        # other truthy values through this path.
+        if full:
+            return self.get_data_single_param_full('QID')
+        return self.get_data_single_param('QID')
 
-    def get_model2(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QGMN')
-        else:
-            return self.get_data_single_param('QGMN')
+    def get_model2(self, full=False):
+        if full:
+            return self.get_data_single_param_full('QGMN')
+        return self.get_data_single_param('QGMN')
 
-    def get_mode(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QMOD')
-        else:
-            return self.get_data_single_param('QMOD')    
+    def get_mode(self, full=False):
+        if full:
+            return self.get_data_single_param_full('QMOD')
+        return self.get_data_single_param('QMOD')
 
-    def get_warning_status(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QPIWS')
-        else:
-            return self.get_data_single_param('QPIWS')      
+    def get_warning_status(self, full=False):
+        if full:
+            return self.get_data_single_param_full('QPIWS')
+        return self.get_data_single_param('QPIWS')
 
-    def get_cpu_firmware_version(self,full=False):
-        data=self.get_data_single_param_full('QVFW')
-        if(full==True):
-           return data
-        else:
-            return data['value']
+    def get_cpu_firmware_version(self, full=False):
+        data = self.get_data_single_param_full('QVFW')
+        if full:
+            return data
+        return data['value']
 
-    def get_panel_firmware_version(self,full=False):
-        data=self.get_data_single_param_full('QVFW3')
-        if(full==True):
-           return data
-        else:
-            return data['value']    
+    def get_panel_firmware_version(self, full=False):
+        data = self.get_data_single_param_full('QVFW3')
+        if full:
+            return data
+        return data['value']
 
-    def get_bt_version(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QVFW2')
-        else:
-            return self.get_data_single_param('QVFW2')   
+    def get_bt_version(self, full=False):
+        if full:
+            return self.get_data_single_param_full('QVFW2')
+        return self.get_data_single_param('QVFW2')
 
-    def get_flag_status(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QFLAG')
-        else:
-            return self.get_data_single_param('QFLAG')
+    def get_ble_firmware_version(self, full=False):
+        """Bluetooth CPU firmware (P1 §2.7 VERFW:). Optional: NAK, empty,
+        or timeout → empty string, never an error. Documented form first;
+        bare VERFW once as fallback (open-source framing variant)."""
+        value = ''
+        for command in ('VERFW:', 'VERFW'):
+            data = self.get_data(command)
+            if not data or data == ['NAK']:
+                continue
+            raw = data[0].replace('VERFW:', '').strip()
+            if raw:
+                value = raw
+                break
+        if full:
+            return {
+                'name': 'ble_cpu_firmware',
+                'text': 'Bluetooth CPU firmware',
+                'value': value,
+                'value_orig': value,
+                'sensor': 'info',
+            }
+        return value
 
-    def get_model(self,full=False):
-        if(full==True):
-           return self.get_data_single_param_full('QMN')
-        else:
-            return self.get_data_single_param('QMN')
+    def get_flag_status(self, full=False):
+        if full:
+            return self.get_data_single_param_full('QFLAG')
+        return self.get_data_single_param('QFLAG')
+
+    def get_model(self, full=False):
+        if full:
+            return self.get_data_single_param_full('QMN')
+        return self.get_data_single_param('QMN')
 
     def get_current_state(self):
-        command='QPIGS';
-        inverter_data=self.get_data(command)
-        received_data=self.process_data(command,inverter_data)
+        command = 'QPIGS'
+        inverter_data = self.get_data(command)
+        received_data = self.process_data(command, inverter_data)
         return received_data
 
     def get_current_conf(self):
-        command='QPIRI';
-        inverter_data=self.get_data(command)
-        received_data=self.process_data(command,inverter_data)
+        command = 'QPIRI'
+        inverter_data = self.get_data(command)
+        received_data = self.process_data(command, inverter_data)
         return received_data
 
     def get_energy_today(self):
-        command='QLD';
-        cur_date=datetime.today().strftime('%Y%m%d')
-        cur_date_reset_time=datetime.today().strftime('%Y-%m-%d') + ' 00:00:00'
-        inverter_data=self.get_data(command,cur_date)
-        received_data=self.process_data(command,inverter_data)
-        received_data[0]["last_reset"]=cur_date_reset_time
+        command = 'QLD'
+        cur_date = datetime.today().strftime('%Y%m%d')
+        cur_date_reset_time = datetime.today().strftime('%Y-%m-%d') + ' 00:00:00'
+        inverter_data = self.get_data(command, cur_date)
+        received_data = self.process_data(command, inverter_data)
+        received_data[0]["last_reset"] = cur_date_reset_time
         return received_data[0]
 
     def get_energy_total(self):
-        command='QLT';
-        inverter_data=self.get_data(command)
-        received_data=self.process_data(command,inverter_data)
+        command = 'QLT'
+        inverter_data = self.get_data(command)
+        received_data = self.process_data(command, inverter_data)
         return received_data[0]
-
-    def set_current_time(self):
-        command='DAT'
-        cur_date_time=datetime.today().strftime('%y%m%d%H%M%S')
-        set_time=self.get_data(command,cur_date_time)
-        return (set_time[0]=='ACK') # True if inverter respond with ACK

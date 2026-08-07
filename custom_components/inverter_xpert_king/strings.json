@@ -3,22 +3,24 @@
     "step": {
       "user": {
         "title": "Inverter Xpert King",
-        "description": "Connect to the inverter via RS232-TCP gateway.",
+        "description": "Connect to the inverter via RS232-TCP gateway. Extra settings can be enabled now or later under Configure. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current.",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]"
+          "host": "Host",
+          "port": "Port",
+          "advanced_settings": "Enable advanced settings"
         },
         "data_description": {
           "host": "IP address or hostname of the RS232-TCP gateway.",
-          "port": "TCP port of RS232-TCP gateway."
+          "port": "TCP port of RS232-TCP gateway.",
+          "advanced_settings": "Adds settings to change battery type, battery voltage thresholds, charge/discharge current limits, output source priority, operation logic. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current."
         }
       },
       "reconfigure": {
         "title": "Update connection",
         "description": "Point the integration at a new gateway address.",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "port": "[%key:common::config_flow::data::port%]"
+          "host": "Host",
+          "port": "Port"
         },
         "data_description": {
           "host": "IP address or hostname of the RS232-TCP gateway.",
@@ -27,19 +29,168 @@
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
+      "cannot_connect": "Failed to connect to the inverter gateway.",
       "invalid_host": "Host cannot be empty or contain spaces.",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "unknown": "Unexpected error."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
-      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+      "already_configured": "Device is already configured.",
+      "reconfigure_successful": "Re-configuration was successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Advanced settings",
+        "data": {
+          "advanced_settings": "Enable advanced settings"
+        },
+        "data_description": {
+          "advanced_settings": "Adds settings to change battery type, battery voltage thresholds, charge/discharge current limits, output source priority, operation logic. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current."
+        }
+      }
     }
   },
   "issues": {
     "migration_id_collision": {
       "title": "Inverter identity migration is waiting on a duplicate",
       "description": "{title}: {reason}. The integration keeps running on its previous identifiers - entities, history and automations are unaffected. Remove or rename the duplicate under Settings > Devices & services > Entities (or Devices), then restart Home Assistant to finish the migration."
+    },
+    "advanced_settings_available": {
+      "title": "More settings are available",
+      "description": "{title}: optional advanced settings can unlock output and battery controls. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current. You can enable them here, or later under Configure.",
+      "fix_flow": {
+        "step": {
+          "offer": {
+            "title": "Advanced settings",
+            "description": "Enable advanced settings for {title}? They unlock output and battery controls. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current.",
+            "data": {
+              "advanced_settings": "Enable advanced settings"
+            },
+            "data_description": {
+              "advanced_settings": "Adds settings to change battery type, battery voltage thresholds, charge/discharge current limits, output source priority, operation logic. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current."
+            }
+          }
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "connection": {
+        "name": "Connection"
+      },
+      "warning_status": {
+        "state": {
+          "ok": "OK",
+          "warning": "Warning",
+          "fault": "Fault",
+          "unknown": "Unknown"
+        }
+      }
+    },
+    "button": {
+      "sync_date_and_time": {
+        "name": "Sync date and time"
+      }
+    },
+    "switch": {
+      "backlight": {
+        "name": "Config - Backlight"
+      },
+      "lcd_timeout": {
+        "name": "Config - Return LCD to default page after 1 minute"
+      },
+      "fault_log": {
+        "name": "Config - Fault code recording"
+      },
+      "source_alarm": {
+        "name": "Config - Alarm on primary source interruption"
+      },
+      "overload_restart": {
+        "name": "Config - Overload auto restart"
+      },
+      "over_temperature_restart": {
+        "name": "Config - Over temperature auto restart"
+      },
+      "overload_bypass": {
+        "name": "Config - Overload bypass"
+      },
+      "overload_bypass_2": {
+        "name": "Config - Overload bypass 2"
+      },
+      "buzzer": {
+        "name": "Config - Buzzer alarm"
+      }
+    },
+    "select": {
+      "charger_source_priority": {
+        "name": "Battery - Charger source priority",
+        "state": {
+          "sbl_ucb": "SBL/UCB (Solar to battery, grid may charge)",
+          "sbl_udc": "SBL/UDC (Solar to battery, no grid charge)",
+          "slb_ucb": "SLB/UCB (Solar to load, grid may charge)",
+          "slb_udc": "SLB/UDC (Solar to load, no grid charge)"
+        }
+      },
+      "input_voltage_range": {
+        "name": "Output - Input voltage range",
+        "state": {
+          "appliance": "Appliance",
+          "ups": "UPS"
+        }
+      },
+      "output_source_priority": {
+        "name": "Output - Source priority",
+        "state": {
+          "usb": "Utility first (USB)",
+          "sub": "Solar first (SUB)",
+          "sbu": "Solar/Battery/Utility (SBU)"
+        }
+      },
+      "operation_logic": {
+        "name": "Output - Operation logic",
+        "state": {
+          "automatic": "Automatic",
+          "online": "Online",
+          "eco": "ECO"
+        }
+      },
+      "battery_type": {
+        "name": "Battery - Type",
+        "state": {
+          "agm": "AGM",
+          "flooded": "Flooded",
+          "user_defined": "User defined",
+          "pylon": "Pylontech",
+          "shinheung": "Shinheung",
+          "weco": "Weco",
+          "soltaro": "Soltaro"
+        }
+      },
+      "max_charging_current": {
+        "name": "Battery - Max charging current"
+      },
+      "max_ac_charging_current": {
+        "name": "Battery - Max AC charging current"
+      }
+    },
+    "number": {
+      "battery_under_voltage": {
+        "name": "Battery - Under voltage"
+      },
+      "battery_recharge_voltage": {
+        "name": "Battery - Back to grid voltage"
+      },
+      "battery_redischarge_voltage": {
+        "name": "Battery - Back to discharge voltage"
+      },
+      "battery_float_voltage": {
+        "name": "Battery - Float voltage"
+      },
+      "battery_bulk_voltage": {
+        "name": "Battery - Bulk voltage"
+      }
     }
   }
 }

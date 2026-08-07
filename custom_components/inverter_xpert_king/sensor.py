@@ -1,27 +1,17 @@
 """Platform for sensor integration."""
-import asyncio
-from datetime import timedelta
+import logging
 
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import PERCENTAGE, EntityCategory
-
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorStateClass,
-    SensorEntity
-)
+from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, ORPHAN_ABSENCE_THRESHOLD
+from .entity_naming import CONNECTION_ENTITY_KEY, assign_entity_id, connection_target
+from .inverter.qflag import decode_flag_status
+from .inverter.qpiws import decode_warning_status
 
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
-from homeassistant.core import callback
-
-
-import logging
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -31,110 +21,68 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     new_devices = []
     for inverter in hub.inverters:
-        coordinator = InverterDataCoordinator(hass, hub, inverter)
+        # hub.data_coordinator was already created and first-refreshed in
+        # __init__.py, before any platform was set up - it's shared with
+        # the switch platform's own QFLAG-based discovery, so setup here
+        # only attaches to it, it never polls on its own account.
+        coordinator = hub.data_coordinator
         coordinator.absence_tracker = FieldAbsenceTracker(hass, inverter.inverter_id)
-        await coordinator.async_config_entry_first_refresh()
+        if coordinator.last_update_success:
+            coordinator.absence_tracker.observe(coordinator.last_command_defs, coordinator.last_results)
 
-        coordinator_diag = InverterConfigCoordinator(hass, hub, inverter)
+        # hub.settings_coordinator was already created and first-refreshed
+        # in __init__.py, the same way as hub.data_coordinator above - the
+        # select and number platforms read the same instance, so setup
+        # here only attaches to it, it never polls QPIRI on its own.
+        coordinator_diag = hub.settings_coordinator
         coordinator_diag.absence_tracker = FieldAbsenceTracker(hass, inverter.inverter_id)
-        await coordinator_diag.async_config_entry_first_refresh()
+        if coordinator_diag.last_update_success:
+            coordinator_diag.absence_tracker.observe(
+                coordinator_diag.last_command_defs, coordinator_diag.last_results
+            )
 
         known_data_params = set()
-        new_devices += _build_entities(coordinator, inverter, coordinator.data or [], known_data_params)
+        new_devices += _build_entities(
+            hass, coordinator, inverter, coordinator.data or [], known_data_params
+        )
 
-        new_devices.append(SensorInverterBatteryCurrent(coordinator, inverter, []))
-        new_devices.append(SensorInverterBatteryPower(coordinator, inverter, []))
-        new_devices.append(SensorInverterBatteryPowerCharging(coordinator, inverter, []))
-        new_devices.append(SensorInverterBatteryPowerDischarge(coordinator, inverter, []))
+        new_devices.append(SensorInverterBatteryCurrent(hass, coordinator, inverter, []))
+        new_devices.append(SensorInverterBatteryPower(hass, coordinator, inverter, []))
+        new_devices.append(SensorInverterBatteryPowerCharging(hass, coordinator, inverter, []))
+        new_devices.append(SensorInverterBatteryPowerDischarge(hass, coordinator, inverter, []))
 
         known_conf_params = set()
         new_devices += _build_entities(
-            coordinator_diag, inverter, coordinator_diag.data or [], known_conf_params, diag=True
+            hass,
+            coordinator_diag,
+            inverter,
+            coordinator_diag.data or [],
+            known_conf_params,
+            diag=True,
         )
+
+        # Connection endpoint — not a coordinator entity and not a wire
+        # field, so it stays available when the inverter is unreachable
+        # and the absence tracker cannot disable it.
+        new_devices.append(SensorInverterConnection(hass, inverter))
 
         # A field missing from this first poll isn't gone for good — every
         # later poll gets the same chance to introduce it.
-        _watch_for_new_params(coordinator, inverter, known_data_params, async_add_entities, config_entry)
         _watch_for_new_params(
-            coordinator_diag, inverter, known_conf_params, async_add_entities, config_entry, diag=True
+            hass, coordinator, inverter, known_data_params, async_add_entities, config_entry
+        )
+        _watch_for_new_params(
+            hass,
+            coordinator_diag,
+            inverter,
+            known_conf_params,
+            async_add_entities,
+            config_entry,
+            diag=True,
         )
 
     if new_devices:
         async_add_entities(new_devices)
-
-
-class InverterDataCoordinator(DataUpdateCoordinator):
-    """My custom coordinator."""
-
-    def __init__(self, hass, hub, inverter):
-        """Initialize my coordinator."""
-        super().__init__(
-            hass,
-            _LOGGER,
-            # Name of the data. For logging purposes.
-            name="Inverter Data Coordinator",
-            # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(seconds=7),
-        )
-        self.hub = hub
-        self.inverter=inverter
-        self.absence_tracker: "FieldAbsenceTracker | None" = None
-
-    async def _async_update_data(self):
-        """Fetch data from API endpoint.
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
-        try:
-            async with asyncio.timeout(30):
-                command_defs, results = await self.hub.async_poll('data')
-
-        except Exception as exc:
-            _LOGGER.error("Inverter data update failed: %s", exc)
-            await self.inverter.reconnect()
-            raise UpdateFailed(str(exc)) from exc
-
-        if self.absence_tracker is not None:
-            self.absence_tracker.observe(command_defs, results)
-        return [item for _, _ok, parsed, *_ in results for item in parsed]
-
-
-class InverterConfigCoordinator(DataUpdateCoordinator):
-    """My custom coordinator."""
-
-    def __init__(self, hass, hub, inverter):
-        """Initialize my coordinator."""
-        super().__init__(
-            hass,
-            _LOGGER,
-            # Name of the data. For logging purposes.
-            name="Inverter Config Coordinator",
-            # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(seconds=600),
-        )
-        self.hub = hub
-        self.inverter=inverter
-        self.absence_tracker: "FieldAbsenceTracker | None" = None
-
-    async def _async_update_data(self):
-        """Fetch data from API endpoint.
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
-        try:
-            async with asyncio.timeout(30):
-                command_defs, results = await self.hub.async_poll('conf')
-
-        except Exception as exc:
-            _LOGGER.error("Inverter config update failed: %s", exc)
-            await self.inverter.reconnect()
-            raise UpdateFailed(str(exc)) from exc
-
-        if self.absence_tracker is not None:
-            self.absence_tracker.observe(command_defs, results)
-        return [item for _, _ok, parsed, *_ in results for item in parsed]
 
 
 def _described_param_names(field_conf) -> list[str]:
@@ -277,16 +225,54 @@ class SensorBase(CoordinatorEntity, SensorEntity):
         return self._connection_ok()
 
 
+class SensorInverterConnection(SensorEntity):
+    """Shows the configured connection endpoint (host:port today).
+
+    Not backed by a coordinator poll — availability must not follow the
+    inverter link, because that is the situation this sensor exists to
+    explain. Reconfigure reloads the entry, so a new address appears
+    without a separate update path.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_translation_key = CONNECTION_ENTITY_KEY
+    _attr_should_poll = False
+
+    def __init__(self, hass, inverter) -> None:
+        self._inverter = inverter
+        self._attr_unique_id = f"{inverter.inverter_id}_{CONNECTION_ENTITY_KEY}"
+        assign_entity_id(hass, self, "sensor", CONNECTION_ENTITY_KEY)
+
+    @property
+    def device_info(self):
+        return self._inverter.device_info
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> str:
+        return connection_target(self._inverter.hub)
+
+
 class SensorInverter(SensorBase):
-    def __init__(self, coordinator, inverter, inverter_param):
+    # Floor for suggested_display_precision when the wire token has fewer
+    # (or no) fractional digits. None = not a numeric display (info/text).
+    _precision_floor: int | None = None
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
         super().__init__(coordinator, inverter, inverter_param)
         self.sensor_name=inverter_param["param"]
         self._attr_unique_id = f"{self._inverter.inverter_id}_{inverter_param['param']}"
         self._attr_name = f"{inverter_param['text']}"
         self._attr_native_unit_of_measurement = inverter_param["unit"] or None
         self._missing_params_logged = set()
-        if('diag' in inverter_param and inverter_param['diag']==True):
+        # `diag` is only ever set to the boolean True by _build_entities.
+        if inverter_param.get("diag"):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        assign_entity_id(hass, self, "sensor", inverter_param["param"])
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -323,6 +309,27 @@ class SensorInverter(SensorBase):
         return data_item["value"] if data_item is not None else None
 
     @property
+    def suggested_display_precision(self) -> int | None:
+        """Prefer the device's own fractional digits; never below the quantity floor.
+
+        Presentation only - stored/native values are left alone. When the
+        wire token carried more decimals than the floor (battery voltage
+        often arrives as nn.nn), keep that resolution so HA does not paint
+        a fractional reading as a bare integer. Looks the field up quietly
+        so a derived sensor (no matching poll field) does not log absence.
+        """
+        floor = self._precision_floor
+        if floor is None:
+            return None
+        for data_item in self.coordinator.data or ():
+            if data_item.get("param") == self.sensor_name:
+                wire = data_item.get("decimals")
+                if isinstance(wire, int) and wire >= 0:
+                    return max(wire, floor)
+                break
+        return floor
+
+    @property
     def entity_registry_enabled_default(self) -> bool:
         """Return if the entity should be enabled when first added to the entity registry."""
         disabled_params=['machine_type','output_mode','pv_power_balance','pv_ok_condition_for_parallel']
@@ -332,69 +339,158 @@ class SensorInverter(SensorBase):
         return True
 
 class SensorInverterVoltage(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 1
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.VOLTAGE
 
 class SensorInverterCurrent(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 1
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.CURRENT
 
 class SensorInverterFrequency(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 1
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.FREQUENCY
 
 class SensorInverterPower(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.POWER
 
 class SensorInverterApparentPower(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.APPARENT_POWER
 
 class SensorInverterPercent(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = PERCENTAGE
 
 class SensorInverterBattery(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.BATTERY
         self._attr_native_unit_of_measurement = PERCENTAGE
 
 class SensorInverterTemperature(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 1
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
+
+class SensorInverterDuration(SensorInverter):
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_device_class = SensorDeviceClass.DURATION
 
 class SensorInverterInfo(SensorInverter):
     """Text/status field with no numeric meaning — no device or state class, just a string state."""
 
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
+
+
+class SensorInverterWarningStatus(SensorInverterInfo):
+    """QPIWS boiled down to a health summary: ok / warning / fault."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["ok", "warning", "fault", "unknown"]
+    _attr_translation_key = "warning_status"
+
+    @property
+    def native_value(self):
+        data_item = self.GetParamDataByName(self.sensor_name)
+        if data_item is None:
+            return None
+        return decode_warning_status(data_item["value"]).status
+
+    @property
+    def extra_state_attributes(self):
+        data_item = self.GetParamDataByName(self.sensor_name)
+        if data_item is None:
+            return None
+        decoded = decode_warning_status(data_item["value"])
+        return {
+            "summary": decoded.summary,
+            "faults": decoded.faults,
+            "warnings": decoded.warnings,
+            "info": decoded.info,
+            "fault_code": decoded.fault_code,
+            "fault_description": decoded.fault_description,
+            "unknown_bits": decoded.unknown_bits,
+            "raw": decoded.raw,
+            "bits_length": decoded.bits_length,
+        }
+
+
+class SensorInverterFlagStatus(SensorInverterInfo):
+    """QFLAG boiled down to a list of enabled device settings."""
+
+    @property
+    def native_value(self):
+        data_item = self.GetParamDataByName(self.sensor_name)
+        if data_item is None:
+            return None
+        return decode_flag_status(data_item["value"]).state
+
+    @property
+    def extra_state_attributes(self):
+        data_item = self.GetParamDataByName(self.sensor_name)
+        if data_item is None:
+            return None
+        decoded = decode_flag_status(data_item["value"])
+        return {
+            "enabled": decoded.enabled,
+            "disabled": decoded.disabled,
+            "not_reported": decoded.not_reported,
+            "unknown_letters": decoded.unknown_letters,
+            "flags": decoded.flags,
+            "battery_connected": decoded.battery_connected,
+            "raw": decoded.raw,
+        }
+
 
 class SensorInverterEnergy(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_device_class = SensorDeviceClass.ENERGY
 
 class SensorInverterEnergyTotal(SensorInverter):
-    def __init__(self, coordinator, inverter, inverter_param):
-        super().__init__(coordinator, inverter, inverter_param)
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_device_class = SensorDeviceClass.ENERGY
         # TOTAL_INCREASING would mis-aggregate when zero values appear in the
         # stream before we can filter them, so keep TOTAL for now.
@@ -404,10 +500,11 @@ class SensorInverterEnergyTotal(SensorInverter):
 class SensorInverterBatteryCurrent(SensorInverter):
     _attr_device_class = SensorDeviceClass.CURRENT
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _precision_floor = 1
 
-    def __init__(self, coordinator, inverter, inverter_param):
+    def __init__(self, hass, coordinator, inverter, inverter_param):
         inverter_param={'param':'battery_current','text':'Battery current','unit':'A'}
-        super().__init__(coordinator, inverter, inverter_param)
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_unique_id = f"{self._inverter.inverter_id}_{self.sensor_name}"
 
     @property
@@ -425,10 +522,11 @@ class SensorInverterBatteryCurrent(SensorInverter):
 class SensorInverterBatteryPower(SensorInverter):
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _precision_floor = 0
 
-    def __init__(self, coordinator, inverter, inverter_param):
+    def __init__(self, hass, coordinator, inverter, inverter_param):
         inverter_param={'param':'battery_power','text':'Battery power','unit':'W'}
-        super().__init__(coordinator, inverter, inverter_param)
+        super().__init__(hass, coordinator, inverter, inverter_param)
         self._attr_unique_id = f"{self._inverter.inverter_id}_{self.sensor_name}"
 
     @property
@@ -448,10 +546,11 @@ class SensorInverterBatteryPower(SensorInverter):
 class SensorInverterBatteryPowerCharging(SensorInverter):
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _precision_floor = 0
 
-    def __init__(self, coordinator, inverter, inverter_param):
+    def __init__(self, hass, coordinator, inverter, inverter_param):
         inverter_param={'param':'battery_power_charging','text':'Battery Power Charging','unit':'W'}
-        super().__init__(coordinator, inverter, inverter_param)
+        super().__init__(hass, coordinator, inverter, inverter_param)
 
     @property
     def available(self) -> bool:
@@ -468,10 +567,11 @@ class SensorInverterBatteryPowerCharging(SensorInverter):
 class SensorInverterBatteryPowerDischarge(SensorInverter):
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _precision_floor = 0
 
-    def __init__(self, coordinator, inverter, inverter_param):
+    def __init__(self, hass, coordinator, inverter, inverter_param):
         inverter_param={'param':'battery_power_discharge','text':'Battery Power Discharge','unit':'W'}
-        super().__init__(coordinator, inverter, inverter_param)
+        super().__init__(hass, coordinator, inverter, inverter_param)
 
     @property
     def available(self) -> bool:
@@ -497,11 +597,14 @@ SENSOR_CLASS_BY_TYPE = {
     "percent": SensorInverterPercent,
     "battery": SensorInverterBattery,
     "temperature": SensorInverterTemperature,
+    "duration_time": SensorInverterDuration,
     "info": SensorInverterInfo,
+    "warning_status": SensorInverterWarningStatus,
+    "flag_status": SensorInverterFlagStatus,
 }
 
 
-def _build_entities(coordinator, inverter, params, known_params, *, diag=False):
+def _build_entities(hass, coordinator, inverter, params, known_params, *, diag=False):
     """Create entities for params seen in a poll that aren't known yet.
 
     Discovery follows what the device actually returned, not the command
@@ -519,11 +622,13 @@ def _build_entities(coordinator, inverter, params, known_params, *, diag=False):
         if diag:
             inverter_param = {**inverter_param, "diag": True}
         known_params.add(param_name)
-        entities.append(entity_cls(coordinator, inverter, inverter_param))
+        entities.append(entity_cls(hass, coordinator, inverter, inverter_param))
     return entities
 
 
-def _watch_for_new_params(coordinator, inverter, known_params, async_add_entities, config_entry, *, diag=False):
+def _watch_for_new_params(
+    hass, coordinator, inverter, known_params, async_add_entities, config_entry, *, diag=False
+):
     """Keep adding entities as new fields show up in later polls.
 
     The listener must not outlive the config entry it belongs to — an
@@ -534,7 +639,9 @@ def _watch_for_new_params(coordinator, inverter, known_params, async_add_entitie
 
     @callback
     def _on_update() -> None:
-        new_entities = _build_entities(coordinator, inverter, coordinator.data or [], known_params, diag=diag)
+        new_entities = _build_entities(
+            hass, coordinator, inverter, coordinator.data or [], known_params, diag=diag
+        )
         if new_entities:
             async_add_entities(new_entities)
 
