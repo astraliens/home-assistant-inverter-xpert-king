@@ -550,6 +550,16 @@ def _preflight(inverter_client, profile: dict):
 def _send_and_confirm(inverter_client, command: str, wire_param: str, param_name: str, target) -> tuple[
     StepOutcome, dict[str, object] | None, list | None
 ]:
+    """Send one set command and confirm it from a fresh QPIRI read.
+
+    `confirmed` is the read-back matching `target`, on its own (D048):
+    steps are only ever planned for a field that is actually changing,
+    so a matching read-back cannot be a coincidental "was already
+    there" - and an `ACK` this module never saw is not proof the device
+    refused, only that the reply frame did not arrive as expected.
+    `accepted` is still recorded for the step journal a caller may want
+    to show, it just no longer gates `confirmed`.
+    """
     reply = inverter_client.get_data(command, wire_param)
     accepted = reply == ['ACK']
     # Captured immediately after the set call and before the confirming
@@ -564,7 +574,7 @@ def _send_and_confirm(inverter_client, command: str, wire_param: str, param_name
         )
         return outcome, None, None
     read_back = snapshot.get(param_name)
-    confirmed = accepted and read_back == target
+    confirmed = read_back == target
     outcome = StepOutcome(
         field=param_name, command=command, target=target,
         accepted=accepted, read_back=read_back, confirmed=confirmed, transmitted=transmitted,

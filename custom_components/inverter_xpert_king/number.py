@@ -55,9 +55,23 @@ class VoltageSetting:
     allow_zero_sentinel: bool = False
 
 
-# All tier 2 (advanced settings only). Ordered low to high by the voltage
-# curve they represent: under-voltage cutoff, recharge (back to grid),
-# re-discharge (back to battery), float, bulk/CV.
+# All tier 2 (advanced settings only). Two independent ordered groups
+# (D047) - no relation between them, even though both live in this one
+# tuple and both feed the same planner/bounds/save-check machinery:
+#
+#   under-voltage cutoff < recharge (back to grid) < re-discharge
+#   (back to battery) - a grid/battery hysteresis chain, floor for
+#   re-discharge is its own documented range plus staying above
+#   recharge, nothing above it;
+#
+#   float < bulk/CV - float is the CV-stage hold level, capped by bulk.
+#
+# A single flat "ascending chain order" comment used to describe this
+# tuple before the live device proved PBDV can sit above both float and
+# bulk at once (K79): PBDV's own upper link and PBFT's own lower link
+# below are what actually define the two groups, not this tuple's
+# position order, and `battery_chain.chain_groups` derives its result
+# from exactly those links.
 VOLTAGE_SETTINGS: tuple[VoltageSetting, ...] = (
     VoltageSetting(
         command="PSDV",
@@ -78,14 +92,14 @@ VOLTAGE_SETTINGS: tuple[VoltageSetting, ...] = (
         param_name="battery_redischarge_voltage",
         doc_range=(48.0, 64.0),
         lower_neighbor="battery_recharge_voltage",
-        upper_neighbor="battery_float_voltage",
+        upper_neighbor=None,
         allow_zero_sentinel=True,
     ),
     VoltageSetting(
         command="PBFT",
         param_name="battery_float_voltage",
         doc_range=(48.0, 64.0),
-        lower_neighbor="battery_redischarge_voltage",
+        lower_neighbor=None,
         upper_neighbor="battery_bulk_voltage",
     ),
     VoltageSetting(

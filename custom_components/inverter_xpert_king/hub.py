@@ -265,6 +265,12 @@ class SettingWriteResult:
     act on for success/failure; the rest exists for building an error
     message, the same shape as `FlagWriteResult`.
 
+    `ok` is the read-back matching `target_value` on its own (D048) -
+    an `accepted=False` does not veto it, since a set command is only
+    ever sent for a field that is genuinely changing and a matching
+    read-back afterward cannot be a coincidence. `accepted` is kept for
+    the error message, not as a second gate.
+
     `snapshot`/`snapshot_parsed` carry the fresh QPIRI read taken to
     confirm this write (the full param->value map, and the same parsed
     list shape the settings coordinator's own poll produces) - present
@@ -339,7 +345,7 @@ def _write_qpiri_setting(
         )
 
     read_back = after[field_name]
-    ok = accepted and read_back == target_value
+    ok = read_back == target_value
     return SettingWriteResult(
         ok=ok, accepted=accepted, read_back=read_back, sent=True,
         snapshot=after, snapshot_parsed=after_parsed, before=before[field_name],

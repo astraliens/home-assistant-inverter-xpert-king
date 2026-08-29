@@ -10,7 +10,7 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
-from .battery_chain import first_out_of_order_pair
+from .battery_chain import chain_groups, first_out_of_order_pair
 from .battery_profile_storage import (
     DO_NOT_CHANGE,
     PROFILE_ID_KEY as _PROFILE_ID,
@@ -236,6 +236,11 @@ _VOLTAGE_FIELD_BY_PARAM = {
 # presentation order and puts bulk_voltage ahead of float_voltage.
 _VOLTAGE_CHAIN_FIELD_ORDER = tuple(_VOLTAGE_FIELD_BY_PARAM[s.param_name] for s in VOLTAGE_SETTINGS)
 
+# Which of the two independent ordered groups (D047) each field belongs
+# to, derived from VOLTAGE_SETTINGS' own neighbour links - not a second
+# copy of the grouping, just this form's field names attached to it.
+_VOLTAGE_CHAIN_GROUP_BY_PARAM = chain_groups(VOLTAGE_SETTINGS)
+
 _CURRENT_SETTING_BY_PARAM = {s.param_name: s for s in CURRENT_SETTINGS}
 _CURRENT_SETTING_BY_FIELD = {
     field_name: _CURRENT_SETTING_BY_PARAM[param]
@@ -425,7 +430,12 @@ def _validate_profile_form(
 
     if not errors:
         ordered_values = [
-            (field, fields[field], _VOLTAGE_SETTING_BY_FIELD[field].allow_zero_sentinel)
+            (
+                field,
+                fields[field],
+                _VOLTAGE_SETTING_BY_FIELD[field].allow_zero_sentinel,
+                _VOLTAGE_CHAIN_GROUP_BY_PARAM[_VOLTAGE_SETTING_BY_FIELD[field].param_name],
+            )
             for field in _VOLTAGE_CHAIN_FIELD_ORDER
         ]
         conflict = first_out_of_order_pair(ordered_values)
