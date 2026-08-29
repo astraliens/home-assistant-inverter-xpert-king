@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
+from .battery_apply import ApplyResult, apply_battery_profile
 from .const import DOMAIN, TIME_SYNC_TOLERANCE_SECONDS
 from .inverter.inverterclient import InverterClient
 from .inverter.qflag import WRITABLE_LETTERS, decode_flag_status, letter_to_key
@@ -49,7 +52,7 @@ def generate_device_key() -> str:
     return f"gen_{uuid.uuid4().hex}"
 
 
-def _poll_by_command(inverter_client: InverterClient, command_type: str):
+def _poll_by_command(inverter_client: InverterClient, command_type: str, query_date: date | None = None):
     """Poll every command in a group individually, off the event loop.
 
     Returns the group's slice of the command table (which fields each
@@ -65,15 +68,31 @@ def _poll_by_command(inverter_client: InverterClient, command_type: str):
     device refusing a command outright is a different kind of signal from
     a timeout or a corrupt frame, even though neither counts as a
     successful poll.
+
+    `QLD` is the one command that takes a parameter: the calendar day it
+    reports on. `query_date` must be supplied by the caller (captured from
+    the HA clock before this ever reaches the executor) - polling `QLD`
+    without one is a caller bug, not a runtime condition, so it raises
+    instead of falling back to a wall clock. The same date is attached to
+    the parsed `QLD` item so the entity's `last_reset` always matches the
+    day actually asked for, even if the reply arrives after midnight.
     """
     command_defs = inverter_client.GetCommandByType(command_type)
     results = []
     for command in command_defs:
-        raw = inverter_client.get_data(command)
+        if command == 'QLD':
+            if query_date is None:
+                raise ValueError("QLD poll requires an explicit query_date")
+            raw = inverter_client.get_data(command, query_date.strftime('%Y%m%d'))
+        else:
+            raw = inverter_client.get_data(command)
         naked = raw == ["NAK"]
         ok = bool(raw) and not naked
         if ok:
             parsed = inverter_client.process_data(command, raw)
+            if command == 'QLD':
+                for item in parsed:
+                    item['query_date'] = query_date
             failed_fields = set(inverter_client.last_field_failures)
         else:
             parsed, failed_fields = [], set()
@@ -88,6 +107,33 @@ def poll_got_any_reply(results) -> bool:
     An empty outcome (timeout, closed link, bad frame) does not.
     """
     return any(ok or naked for _, ok, _, _, naked in results)
+
+
+def _apply_overlapped_the_poll_timeout(hub: "Hub", epoch_before: int, exc: BaseException) -> bool:
+    """True only for a **timeout** that happened while an Apply transaction
+    was live at some point since `epoch_before` was captured.
+
+    `async_poll` does all of its work under the same connection lock an
+    Apply transaction holds for its whole duration (`Hub.async_run`) - while
+    Apply holds it, a queued poll performs no I/O of its own at all, it is
+    simply parked waiting for the lock. So a *timeout* there proves nothing
+    about the transport and must not be treated as one; any *other*
+    exception type means the poll actually acquired the lock (Apply had
+    already released it, or was never involved) and then genuinely failed
+    on the wire - that is a real failure and must still reconnect, no
+    matter what `apply_epoch` says. Suppressing it would defer recovery
+    from an actual fault indefinitely instead of by one interval at worst.
+
+    Checking `apply_pending` alone at the moment of failure is not enough
+    for the timeout case either: an Apply that both starts and finishes
+    inside a coordinator's 30s wait leaves the gate back at zero by the
+    time the wait times out. `apply_epoch` only ever increases, so any
+    change since `epoch_before` means an Apply started somewhere in
+    between, whether or not it has finished yet.
+    """
+    if not isinstance(exc, TimeoutError):
+        return False
+    return hub.apply_pending or hub.apply_epoch != epoch_before
 
 
 @dataclass
@@ -178,8 +224,14 @@ def _read_device_time(inverter_client: InverterClient) -> datetime | None:
         return None
 
 
-def _sync_time(inverter_client: InverterClient) -> TimeSyncResult:
+def _sync_time(inverter_client: InverterClient, target: datetime) -> TimeSyncResult:
     """Sync the device clock to local time, only writing when it has drifted.
+
+    `target` is a naive local wall-clock value supplied by the caller
+    (`Hub.async_sync_time` takes it from the HA clock) - `QT` reports the
+    device's own clock with no zone, so this stays a naive-vs-naive
+    comparison throughout; an aware datetime here would raise on the
+    first subtraction.
 
     Reads QT first: if the device is already within tolerance, DAT is
     never sent at all - the same redundant-write suppression the flag
@@ -189,8 +241,6 @@ def _sync_time(inverter_client: InverterClient) -> TimeSyncResult:
     plus whatever the device's own clock does in that gap) and is not
     treated as drift.
     """
-    target = datetime.now().replace(microsecond=0)
-
     current_time = _read_device_time(inverter_client)
     if current_time is not None and abs(current_time - target) <= _TIME_SYNC_TOLERANCE:
         return TimeSyncResult(ok=True, accepted=True, device_time=current_time, target_time=target, sent=False)
@@ -214,24 +264,44 @@ class SettingWriteResult:
     the value that was asked for. `ok` is the only field callers should
     act on for success/failure; the rest exists for building an error
     message, the same shape as `FlagWriteResult`.
+
+    `snapshot`/`snapshot_parsed` carry the fresh QPIRI read taken to
+    confirm this write (the full param->value map, and the same parsed
+    list shape the settings coordinator's own poll produces) - present
+    whenever that read succeeded, regardless of whether the write itself
+    was confirmed, so a caller can merge current device state into the
+    coordinator even after a NAK or mismatch.
+
+    `before` is the field's value from the QPIRI read taken *before* the
+    write attempt - the last value this call can vouch for. It matters
+    specifically when `read_back` is None: that means the confirming
+    read failed, not that the field is actually unset, and a caller
+    needs a real "last known" value to report instead of the target it
+    can no longer confirm.
     """
 
     ok: bool
     accepted: bool
     read_back: object
     sent: bool
+    snapshot: dict[str, object] | None = None
+    snapshot_parsed: list | None = None
+    before: object = None
 
 
-def _read_qpiri_fields(inverter_client: InverterClient) -> dict[str, object] | None:
-    """Decoded QPIRI fields keyed by name, or None if the read failed or
-    was refused. Shares the same decoding sensor.py's own QPIRI poll uses,
-    so a value compared here always means the same thing it would mean on
-    a sensor - no separate raw-index table to keep in step with the JSON."""
+def _read_qpiri_snapshot(inverter_client: InverterClient) -> tuple[dict[str, object] | None, list | None]:
+    """Fresh decoded QPIRI, as both a param->value map and the parsed list.
+
+    None, None if the read failed or was refused. Shares the same
+    decoding sensor.py's own QPIRI poll uses, so a value compared here
+    always means the same thing it would mean on a sensor - no separate
+    raw-index table to keep in step with the JSON.
+    """
     raw = inverter_client.get_data('QPIRI')
     if not raw or raw == ['NAK']:
-        return None
+        return None, None
     parsed = inverter_client.process_data('QPIRI', raw)
-    return {item['param']: item['value'] for item in parsed}
+    return {item['param']: item['value'] for item in parsed}, parsed
 
 
 def _write_qpiri_setting(
@@ -249,23 +319,31 @@ def _write_qpiri_setting(
     unchanged value" rule accurate. When the field already matches, the
     set command is never sent at all.
     """
-    before = _read_qpiri_fields(inverter_client)
+    before, before_parsed = _read_qpiri_snapshot(inverter_client)
     if before is None or field_name not in before:
         return SettingWriteResult(ok=False, accepted=False, read_back=None, sent=False)
 
     if before[field_name] == target_value:
-        return SettingWriteResult(ok=True, accepted=True, read_back=before[field_name], sent=False)
+        return SettingWriteResult(
+            ok=True, accepted=True, read_back=before[field_name], sent=False,
+            snapshot=before, snapshot_parsed=before_parsed, before=before[field_name],
+        )
 
     reply = inverter_client.get_data(command, param)
     accepted = reply == ['ACK']
 
-    after = _read_qpiri_fields(inverter_client)
+    after, after_parsed = _read_qpiri_snapshot(inverter_client)
     if after is None or field_name not in after:
-        return SettingWriteResult(ok=False, accepted=accepted, read_back=None, sent=True)
+        return SettingWriteResult(
+            ok=False, accepted=accepted, read_back=None, sent=True, before=before[field_name],
+        )
 
     read_back = after[field_name]
     ok = accepted and read_back == target_value
-    return SettingWriteResult(ok=ok, accepted=accepted, read_back=read_back, sent=True)
+    return SettingWriteResult(
+        ok=ok, accepted=accepted, read_back=read_back, sent=True,
+        snapshot=after, snapshot_parsed=after_parsed, before=before[field_name],
+    )
 
 
 def _read_amp_list(inverter_client: InverterClient, command: str) -> list[str]:
@@ -305,10 +383,27 @@ class InverterSettingsCoordinator(DataUpdateCoordinator):
         self.last_results: list = []
 
     async def _async_update_data(self):
+        # A battery-profile Apply is running against the same connection
+        # lock; joining that queue here would tie up this poll for as
+        # long as the whole transaction takes, then fail the moment it's
+        # done as the lock gets pulled out from under a completed cycle.
+        # Republishing the last known data is a no-op update, not a miss.
+        if self.hub.apply_pending:
+            return self.data
+        apply_epoch = self.hub.apply_epoch
+
         try:
             async with asyncio.timeout(30):
                 command_defs, results = await self.hub.async_poll('conf')
         except Exception as exc:
+            if _apply_overlapped_the_poll_timeout(self.hub, apply_epoch, exc):
+                # This was a timeout while an Apply started - and, on this
+                # path, may already have finished - while this poll was
+                # queued behind the connection lock. Same no-op-update
+                # handling as the up-front skip above, not a transport
+                # failure: reconnecting here would tear down a socket the
+                # Apply itself is done with, or still needs.
+                return self.data
             _LOGGER.error("Inverter settings update failed: %s", exc)
             await self.inverter.reconnect()
             raise UpdateFailed(str(exc)) from exc
@@ -363,14 +458,47 @@ class InverterDataCoordinator(DataUpdateCoordinator):
         This is the place to pre-process the data to lookup tables
         so entities can quickly look up their data.
         """
+        # Captured here, before anything reaches the executor, so QLD's
+        # query date and its entity's last_reset always agree with the HA
+        # calendar day this poll actually started on - not the process
+        # timezone, and not whatever day it happens to be by the time the
+        # reply comes back.
+        query_date = dt_util.now().date()
+
+        # Same reasoning as InverterSettingsCoordinator: a pending Apply
+        # holds the connection lock for the length of a whole verified
+        # transaction, not one command - waiting it out here would delay
+        # this cycle by 10-25s and then still fail on a stale lock wait.
+        if self.hub.apply_pending:
+            return self.data
+        apply_epoch = self.hub.apply_epoch
+        was_online = self.hub.online
+
         try:
             async with asyncio.timeout(30):
-                command_defs, results = await self.hub.async_poll('data')
+                command_defs, results = await self.hub.async_poll('data', query_date)
 
         except Exception as exc:
+            if _apply_overlapped_the_poll_timeout(self.hub, apply_epoch, exc):
+                return self.data
             _LOGGER.error("Inverter data update failed: %s", exc)
             await self.inverter.reconnect()
             raise UpdateFailed(str(exc)) from exc
+
+        # This 7s cycle is what actually reconnects the socket - get_data()
+        # dials again on its own the moment it finds itself disconnected,
+        # well before this settings-bound entities' own 600s coordinator
+        # would notice. Availability for number/select entities follows
+        # that same socket flag directly, not this coordinator's data, so
+        # without a nudge here they would keep showing stale unavailability
+        # for up to the rest of that 600s window even though the
+        # connection is already back. One request, only on the edge where
+        # this poll is the one that brought it back - never a periodic
+        # addition to the link.
+        if not was_online and self.hub.online:
+            settings_coordinator = getattr(self.hub, "settings_coordinator", None)
+            if settings_coordinator is not None:
+                self.hass.async_create_task(settings_coordinator.async_request_refresh())
 
         self.last_command_defs, self.last_results = command_defs, results
         if self.absence_tracker is not None:
@@ -407,6 +535,15 @@ class Hub:
         self._lock = asyncio.Lock()
         self.inverter_client = InverterClient(host, port)
         self._device_key_source = device_key_source
+        # Counter, not a boolean: concurrent Apply calls must not have the
+        # first one finishing clear the gate while the second is still
+        # running its own transaction.
+        self._apply_gate = 0
+        # Bumped once per Apply transaction started, never decremented - see
+        # `_apply_overlapped_the_poll_timeout` for why `_apply_gate` reaching
+        # zero again is not by itself enough to tell a coordinator "no Apply
+        # happened".
+        self._apply_epoch = 0
         self.inverters = [
             Inverter(device_key or host.lower(), "Inverter", self),
         ]
@@ -442,10 +579,50 @@ class Hub:
         """Return True while the underlying socket is connected."""
         return self.inverter_client.connected
 
+    @property
+    def apply_pending(self) -> bool:
+        """True while a battery-profile Apply is queued or in flight.
+
+        Both coordinators check this before waiting on the connection
+        lock, not after, so a poll never queues behind a transaction that
+        can realistically take 10-25s on this link and then fail on a
+        lock it no longer needs.
+        """
+        return self._apply_gate > 0
+
+    @property
+    def apply_epoch(self) -> int:
+        """Count of Apply transactions started so far, never decreasing.
+
+        A coordinator captures this before waiting on the connection lock;
+        if it has changed by the time a failure is handled, some Apply
+        overlapped the wait even if `apply_pending` is already back to
+        False.
+        """
+        return self._apply_epoch
+
     async def async_run(self, func, *args):
-        """Run one client call under the connection lock, off the event loop."""
+        """Run one client call under the connection lock, off the event loop.
+
+        The executor thread behind `func` cannot be interrupted once it has
+        started, so a cancellation reaching this coroutine must not let the
+        lock go before that thread actually returns - otherwise the next
+        waiter starts a second job against the same socket while the first
+        one is still using it. `asyncio.shield` keeps a cancellation from
+        touching the job itself; once the job has genuinely finished, the
+        original cancellation is re-raised.
+        """
         async with self._lock:
-            return await self._hass.async_add_executor_job(func, *args)
+            job = self._hass.async_add_executor_job(func, *args)
+            try:
+                return await asyncio.shield(job)
+            except asyncio.CancelledError:
+                while not job.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.wait([job])
+                with contextlib.suppress(BaseException):
+                    job.exception()
+                raise
 
     async def async_connect(self) -> None:
         """Open the connection. No-op when the socket is already live."""
@@ -459,25 +636,76 @@ class Hub:
         """Reconnect under the same lock. Never raises."""
         await self.async_run(self.inverter_client.reconnect)
 
-    async def async_poll(self, command_type: str):
-        """Poll a command group, returning per-command success and parsed fields."""
-        return await self.async_run(_poll_by_command, self.inverter_client, command_type)
+    async def async_poll(self, command_type: str, query_date: date | None = None):
+        """Poll a command group, returning per-command success and parsed fields.
+
+        `query_date` is only meaningful for the `data` group's `QLD`
+        command; every other command ignores it.
+        """
+        return await self.async_run(_poll_by_command, self.inverter_client, command_type, query_date)
 
     async def async_write_flag(self, letter: str, enabled: bool) -> FlagWriteResult:
         """Set one QFLAG letter and confirm it, under the same lock as polling."""
         return await self.async_run(_write_flag, self.inverter_client, letter, enabled)
 
     async def async_sync_time(self) -> TimeSyncResult:
-        """Sync the device clock to local time; sends DAT only if it drifted."""
-        return await self.async_run(_sync_time, self.inverter_client)
+        """Sync the device clock to local time; sends DAT only if it drifted.
+
+        The target is a naive HA-local wall clock, captured here on the
+        async side rather than inside the executor job - `QT` has no zone
+        of its own, so this is deliberately not `dt_util.now()`'s aware
+        value.
+        """
+        target = dt_util.now().replace(tzinfo=None, microsecond=0)
+        return await self.async_run(_sync_time, self.inverter_client, target)
 
     async def async_write_qpiri_setting(
         self, command: str, param: str, field_name: str, target_value: object
     ) -> SettingWriteResult:
         """Set one QPIRI-backed field and confirm it, under the same lock as polling."""
-        return await self.async_run(
+        result = await self.async_run(
             _write_qpiri_setting, self.inverter_client, command, param, field_name, target_value
         )
+        if result.snapshot_parsed:
+            self._merge_settings_snapshot(result.snapshot_parsed)
+        return result
+
+    def _merge_settings_snapshot(self, parsed: list) -> None:
+        """Publish a QPIRI snapshot already read (by a T18 write or an
+        Apply transaction) into the settings coordinator without a new
+        wire poll, so other entities - especially the profile select -
+        see current state immediately instead of waiting up to 600s for
+        the next scheduled 'conf' refresh.
+
+        Fields the snapshot doesn't cover (none, in practice - QPIRI is
+        read whole) are kept from whatever the coordinator already had.
+        """
+        coordinator = self.settings_coordinator
+        if coordinator is None or not parsed:
+            return
+        fresh_params = {item.get('param') for item in parsed}
+        kept = [item for item in (coordinator.data or ()) if item.get('param') not in fresh_params]
+        coordinator.async_set_updated_data([*kept, *parsed])
+
+    async def async_apply_battery_profile(self, profile: dict) -> ApplyResult:
+        """Apply a battery profile as one serialized, best-effort-rollback
+        transaction (see `battery_apply.apply_battery_profile`).
+
+        The gate is raised before the connection lock is even requested,
+        and lowered in `finally` regardless of outcome - success, NAK,
+        timeout, exception, or cancellation. The final confirmed QPIRI
+        snapshot (if any was obtained) is merged into the settings
+        coordinator the same way an individual T18 write's is.
+        """
+        self._apply_gate += 1
+        self._apply_epoch += 1
+        try:
+            result = await self.async_run(apply_battery_profile, self.inverter_client, profile)
+        finally:
+            self._apply_gate -= 1
+        if result.final_snapshot_parsed:
+            self._merge_settings_snapshot(result.final_snapshot_parsed)
+        return result
 
     async def async_read_amp_list(self, command: str) -> list[str]:
         """Read a QMCHGCR/QMUCHGCR allow-list, under the same lock as polling."""

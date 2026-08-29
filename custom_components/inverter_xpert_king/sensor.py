@@ -6,6 +6,7 @@ from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, ORPHAN_ABSENCE_THRESHOLD
 from .entity_naming import CONNECTION_ENTITY_KEY, assign_entity_id, connection_target
@@ -478,14 +479,6 @@ class SensorInverterFlagStatus(SensorInverterInfo):
         }
 
 
-class SensorInverterEnergy(SensorInverter):
-    _precision_floor = 0
-
-    def __init__(self, hass, coordinator, inverter, inverter_param):
-        super().__init__(hass, coordinator, inverter, inverter_param)
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_device_class = SensorDeviceClass.ENERGY
-
 class SensorInverterEnergyTotal(SensorInverter):
     _precision_floor = 0
 
@@ -495,6 +488,29 @@ class SensorInverterEnergyTotal(SensorInverter):
         # TOTAL_INCREASING would mis-aggregate when zero values appear in the
         # stream before we can filter them, so keep TOTAL for now.
         self._attr_state_class = SensorStateClass.TOTAL
+
+
+class SensorInverterEnergyDaily(SensorInverter):
+    """QLD's daily energy bucket: same TOTAL contract as QET/QLT, but with
+    a reset boundary at the start of the exact HA-local day it was queried
+    for - never today's midnight, never a naive/system-local one."""
+
+    _precision_floor = 0
+
+    def __init__(self, hass, coordinator, inverter, inverter_param):
+        super().__init__(hass, coordinator, inverter, inverter_param)
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_state_class = SensorStateClass.TOTAL
+
+    @property
+    def last_reset(self):
+        data_item = self.GetParamDataByName(self.sensor_name)
+        if data_item is None:
+            return None
+        query_date = data_item.get("query_date")
+        if query_date is None:
+            return None
+        return dt_util.start_of_local_day(query_date)
 
 
 class SensorInverterBatteryCurrent(SensorInverter):
@@ -592,8 +608,8 @@ SENSOR_CLASS_BY_TYPE = {
     "frequency": SensorInverterFrequency,
     "power": SensorInverterPower,
     "apparent_power": SensorInverterApparentPower,
-    "energy": SensorInverterEnergy,
     "energy_total": SensorInverterEnergyTotal,
+    "energy_daily": SensorInverterEnergyDaily,
     "percent": SensorInverterPercent,
     "battery": SensorInverterBattery,
     "temperature": SensorInverterTemperature,

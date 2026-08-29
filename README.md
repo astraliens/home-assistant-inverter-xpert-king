@@ -2,10 +2,13 @@
 
 Home Assistant Integration for real-time data monitoring / edit settings of Axpert King (also known as Voltronic Axpert III) inverters via RS232-TCP Gateway
 
+Requires **Home Assistant 2025.8.0** or newer.
+
 ## Features
 
 - Read live values and config params from inverter
 - Change inverter params (battery charge-discharge voltage / battery charge current / other inverter settings) (only if advanced mode ON)
+- Battery profiles
 - Add energy sensors for integration with energy usage
 - Tracks daily energy consumption
 - Sync inverter date and time
@@ -16,15 +19,25 @@ Home Assistant Integration for real-time data monitoring / edit settings of Axpe
 
 ## Notes
 
-This code was written for couple of days without any skills in Python and HA architecture. That is first time I've used Python, so anyone is welcome to make this code better.
 Due to low baud rate in inverter this integration can be slow.
-
 
 > [!CAUTION] 
 > **DO NOT** activate **advanced settings** if you don't know how to setup battery voltages / charge current or anything else.  
 > Changing setting without understanding can lead to **inverter or battery damage.**
 > Any changes you are making to settings of your inverter with this integration you are doing on your own decision. There is no warranty if it will work correctly.
 > ![image](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/integration_inverter_settings.png)
+
+## Battery profiles
+
+A profile is a named set of battery settings. Add, edit or delete them under **Configure**. Apply a profile from the **Battery - Profile** entity on the device card.
+
+Leave a voltage field empty, or leave a current on **Do not change**, to keep the value that is already on the inverter. Only the fields you fill in are written.
+
+Voltage changes are accepted only while the inverter battery type is **User define**. The integration never changes battery type for you — switch it yourself first if your profile includes voltages.
+
+Applying a profile **writes voltages and currents to the inverter**. Same caution as advanced settings: record the current battery values before the first apply, and do not use this if you don't know which setting can be applied to your battery. Incorrect settings can damage your battery or inverter.
+
+![Add battery profile](https://raw.githubusercontent.com/astraliens/home-assistant-inverter-xpert-king/main/images/integration_inverter_profile_add.png)
 
 ## Connecting Inverter to gateway and HA
 

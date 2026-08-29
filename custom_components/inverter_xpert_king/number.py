@@ -12,13 +12,27 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .battery_chain import STEP as _STEP, neighbor_bounds
 from .const import CONF_ADVANCED_SETTINGS, DEFAULT_ADVANCED_SETTINGS, DOMAIN
 from .entity_gate import set_gated_entity_disabled
 from .entity_naming import assign_entity_id
 
-# The frame's "nn.n" shape implies one decimal place, but no document
-# fixes the step explicitly - this is an inference, not a vendor rule.
-_STEP = 0.1
+
+def _describe_unconfirmed_write(label: str, result) -> str:
+    """Wording for a write whose confirming QPIRI read failed - `result`
+    is a `hub.SettingWriteResult` with `read_back` None. Matches the
+    wording `ApplyOutcome.TRANSPORT_UNKNOWN` settled on in
+    battery_apply.py: never assert the setting *was* changed, only that
+    its resulting state is unknown, naming the setting and the last
+    value actually confirmed for it.
+    """
+    if not result.sent:
+        return f"could not read the inverter's current settings - {label} was not changed"
+    return (
+        f"a command changing {label} may have reached the inverter, but no confirming "
+        f"reply came back afterward, so the resulting state is unknown; {label} was last "
+        f"confirmed at {result.before!r}"
+    )
 
 
 @dataclass(frozen=True)
@@ -109,24 +123,17 @@ def voltage_bounds(
     """Return (min, max) for one threshold, constrained by its neighbours
     but never excluding the value the device is currently reporting.
 
-    A neighbour reporting the documented "until full" sentinel (0.0) does
-    not constrain anything - it means that side of the chain is open, not
-    that the boundary sits at zero. If the neighbour-derived range would
-    be empty (lo > hi) or would exclude the current live value - i.e. the
-    device already reports something in a violated order - the whole
-    constraint is dropped for this refresh and the full documented range
-    is returned instead, so the interface never becomes unable to show or
-    reselect what the device already has.
+    The neighbour-tightened range itself comes from `battery_chain` -
+    the same rules the profile-apply planner uses to check a step. This
+    wrapper adds the one behaviour that is specific to a live UI control:
+    if the neighbour-derived range would be empty (lo > hi) or would
+    exclude the current live value - i.e. the device already reports
+    something in a violated order - the whole constraint is dropped for
+    this refresh and the full documented range is returned instead, so
+    the interface never becomes unable to show or reselect what the
+    device already has.
     """
-    lo, hi = doc_range
-    if lower_neighbor_value is not None and lower_neighbor_value > 0:
-        candidate_lo = round(lower_neighbor_value + _STEP, 1)
-        if candidate_lo > lo:
-            lo = candidate_lo
-    if upper_neighbor_value is not None and upper_neighbor_value > 0:
-        candidate_hi = round(upper_neighbor_value - _STEP, 1)
-        if candidate_hi < hi:
-            hi = candidate_hi
+    lo, hi = neighbor_bounds(doc_range, lower_neighbor_value, upper_neighbor_value)
     if lo > hi or (current is not None and not (lo <= current <= hi)):
         return doc_range
     return (lo, hi)
@@ -311,6 +318,8 @@ class InverterVoltageNumber(CoordinatorEntity, NumberEntity):
             self._setting.command, param, self._setting.param_name, rounded
         )
         if not result.ok:
+            if result.read_back is None:
+                raise HomeAssistantError(_describe_unconfirmed_write(label, result))
             raise HomeAssistantError(
                 f"Inverter would not set {label} to {rounded:.1f} V "
                 f"(device now reports {result.read_back!r})"

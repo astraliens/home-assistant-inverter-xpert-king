@@ -746,7 +746,7 @@
       "text": "Total energy today",
       "type": "int",
       "unit": "Wh",
-      "sensor": "energy_total"
+      "sensor": "energy_daily"
     }
   }
 }

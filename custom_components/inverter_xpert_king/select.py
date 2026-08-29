@@ -1,6 +1,7 @@
 """Platform for select integration: enum-shaped QPIRI settings."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from homeassistant.components.select import SelectEntity
@@ -8,13 +9,28 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir, translation
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_ADVANCED_SETTINGS, DEFAULT_ADVANCED_SETTINGS, DOMAIN
+from .battery_apply import VOLTAGE_ORDER_CONFLICT_KEY, ApplyOutcome, ApplyResult, FieldRef
+from .battery_current import CURRENT_SETTINGS, CurrentSetting, _format_current_param
+from .battery_profile_storage import profile_container, usable_profiles
+from .const import (
+    CONF_ADVANCED_SETTINGS,
+    DEFAULT_ADVANCED_SETTINGS,
+    DOMAIN,
+    ISSUE_PROFILE_APPLY_MIXED_STATE,
+    ISSUE_PROFILE_APPLY_TRANSPORT_UNKNOWN,
+    PROFILE_FIELD_ORDER,
+    PROFILE_FIELD_TO_QPIRI_PARAM,
+)
 from .entity_gate import set_gated_entity_disabled
 from .entity_naming import assign_entity_id
+from .number import _describe_unconfirmed_write
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,40 +95,6 @@ ENUM_SETTINGS: tuple[EnumSetting, ...] = (
         },
     ),
 )
-
-
-@dataclass(frozen=True)
-class CurrentSetting:
-    """One QPIRI-backed charge-current control whose options come from the
-    device's own allow-list query, never a hardcoded set of amps.
-
-    `amp_width` is the digit count PROTOCOL.md documents for this command's
-    amps field - 3 for MNCHGC (`MNCHGC0060`), 2 for MUCHGC (`MUCHGC030`).
-    The two commands are not interchangeable padding-wise: an amps value
-    that happens to already be N characters wide in the device's allow-list
-    reply is not proof that N is the width this *set* command expects.
-    """
-
-    command: str
-    list_command: str
-    param_name: str
-    amp_width: int
-
-
-CURRENT_SETTINGS: tuple[CurrentSetting, ...] = (
-    CurrentSetting(command="MNCHGC", list_command="QMCHGCR", param_name="max_charging_current", amp_width=3),
-    CurrentSetting(command="MUCHGC", list_command="QMUCHGCR", param_name="max_ac_charging_current", amp_width=2),
-)
-
-
-def _format_current_param(amps: int, amp_width: int) -> str:
-    """Single-block parallel index ("0") + amps at the command's documented
-    width. `amp_width` is a floor, not a cap: P1 notes the AC field grows
-    past its usual 2 digits once the value exceeds 99 A, and formatting
-    with a minimum width (rather than truncating to it) produces that
-    wider frame automatically instead of mangling a value that large.
-    """
-    return f"0{amps:0{amp_width}d}"
 
 
 def _unique_id(inverter, param_name: str) -> str:
@@ -241,12 +223,20 @@ async def async_setup_entry(
                 await _new_current_entities(hass, hub, coordinator, inverter, CURRENT_SETTINGS, known_current)
             )
 
+        profiles = usable_profiles(profile_container(config_entry.options))
+        _reconcile_profile_select_gate(hass, inverter, enabled=advanced and bool(profiles))
+        if advanced and profiles:
+            entities.append(InverterProfileSelect(hass, coordinator, inverter, hub, profiles))
+
     if entities:
         async_add_entities(entities)
 
     # Second pass for rows that were already live (not in the deleted area).
     for inverter in inverters:
         _reconcile_select_gate(hass, inverter, advanced=advanced)
+        _reconcile_profile_select_gate(
+            hass, inverter, enabled=advanced and bool(usable_profiles(profile_container(config_entry.options)))
+        )
 
 
 class InverterEnumSelect(CoordinatorEntity, SelectEntity):
@@ -308,8 +298,11 @@ class InverterEnumSelect(CoordinatorEntity, SelectEntity):
             self._setting.command, param, self._setting.param_name, label
         )
         if not result.ok:
+            setting_label = self._setting.param_name.replace('_', ' ')
+            if result.read_back is None:
+                raise HomeAssistantError(_describe_unconfirmed_write(setting_label, result))
             raise HomeAssistantError(
-                f"Inverter would not set {self._setting.param_name.replace('_', ' ')} to "
+                f"Inverter would not set {setting_label} to "
                 f"{option!r} (device now reports {result.read_back!r})"
             )
         self._state = self._slug_by_label.get(result.read_back, option)
@@ -371,9 +364,284 @@ class InverterCurrentSelect(CoordinatorEntity, SelectEntity):
             self._setting.command, param, self._setting.param_name, amps
         )
         if not result.ok:
+            setting_label = self._setting.param_name.replace('_', ' ')
+            if result.read_back is None:
+                raise HomeAssistantError(_describe_unconfirmed_write(setting_label, result))
             raise HomeAssistantError(
-                f"Inverter would not set {self._setting.param_name.replace('_', ' ')} to "
+                f"Inverter would not set {setting_label} to "
                 f"{option} A (device now reports {result.read_back!r})"
             )
         self._state = str(result.read_back)
         self.schedule_update_ha_state()
+
+
+# --- Battery profile select --------------------------------------------
+
+_PROFILE_SELECT_PARAM = "battery_profile"
+
+
+def _profile_select_unique_id(inverter) -> str:
+    return _unique_id(inverter, _PROFILE_SELECT_PARAM)
+
+
+def _reconcile_profile_select_gate(hass: HomeAssistant, inverter, *, enabled: bool) -> None:
+    set_gated_entity_disabled(hass, "select", _profile_select_unique_id(inverter), not enabled)
+
+
+def _live_param_values(coordinator) -> dict[str, object]:
+    return {item.get("param"): item.get("value") for item in (coordinator.data or ())}
+
+
+def profile_matches_live(profile: dict, live: dict[str, object]) -> bool:
+    """True when every explicit (non-DNC) field of `profile` equals the
+    corresponding live value. DNC fields never participate."""
+    for profile_field in PROFILE_FIELD_ORDER:
+        target = profile.get(profile_field)
+        if target is None:
+            continue
+        if live.get(PROFILE_FIELD_TO_QPIRI_PARAM[profile_field]) != target:
+            return False
+    return True
+
+
+def matching_profile_name(profiles: list[dict], live: dict[str, object]) -> str | None:
+    """Exact-match profile name, or None for no match or more than one.
+
+    More than one match is a normal, savable configuration: only true
+    duplicates are refused at save time, so profiles whose explicit
+    fields do not conflict - one setting currents, another voltages -
+    can both match the same live state. Never guess by picking the
+    first; unknown is the only honest state to show. That state is
+    otherwise indistinguishable from a plain no-match, so which
+    profiles overlapped is logged rather than silently swallowed.
+    """
+    matches = [p["name"] for p in profiles if profile_matches_live(p, live)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        _LOGGER.warning(
+            "Battery profiles %s all match the inverter's current settings at "
+            "once; not reporting any of them as selected",
+            matches,
+        )
+    return None
+
+
+def _apply_issue_id(inverter) -> str:
+    # One issue id per inverter regardless of which of the two variants
+    # below is currently showing - re-raising with a different
+    # translation_key replaces the previous wording under the same id.
+    return f"{ISSUE_PROFILE_APPLY_MIXED_STATE}_{inverter.inverter_id}"
+
+
+def _raise_apply_mixed_state_issue(
+    hass: HomeAssistant, inverter, message: str, *, translation_key: str = ISSUE_PROFILE_APPLY_MIXED_STATE
+) -> None:
+    """Amendment 5a: an unconfirmed rollback and a connection lost with no
+    rollback attempted are not the same situation, so they use different
+    translation keys - never present a lost connection as an unconfirmed
+    undo, or the other way round."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _apply_issue_id(inverter),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=translation_key,
+        translation_placeholders={
+            "title": getattr(inverter, "name", None) or inverter.inverter_id,
+            "detail": message,
+        },
+    )
+
+
+def _clear_apply_mixed_state_issue(hass: HomeAssistant, inverter) -> None:
+    ir.async_delete_issue(hass, DOMAIN, _apply_issue_id(inverter))
+
+
+# --- Localizing battery_apply's translation placeholders --------------------
+#
+# battery_apply.py has no `hass` and must stay that way (see its module
+# docstring), so a placeholder value wrapped in `battery_apply.FieldRef`
+# carries a raw PROFILE_FIELD_* identifier, not yet a word a user would
+# recognize. This is the one place that resolves it - through the
+# add-profile form's own already-translated labels (the exact words on
+# the profile form), never a second naming scheme - before the result
+# reaches HomeAssistantError. The `FieldRef` type, not a naming convention
+# on the placeholder's key, is what marks a value as needing this: an
+# eleventh message that forgets to wrap its field id this way leaves it
+# unresolved rather than silently passing as already a label.
+
+# A custom top-level category, not one of HA's well-known ones (config,
+# options, entity, exceptions...) - but the loader treats none of those
+# as a fixed whitelist. It reads the whole translations/<lang>.json file
+# for the domain and turns whatever top-level keys it finds into
+# categories (homeassistant.helpers.translation.build_resources and
+# _TranslationCache._build_category_cache, calling
+# homeassistant.loader.Integration.has_translations - checked against
+# Home Assistant 2026.7.4, the version this repo's dev/CT environment
+# runs). test_apply_fragments_category_resolves_through_real_ha_translation_uk
+# in test_apply_localization.py pins that against the real loader, not a
+# mock, so a future HA change that stops honoring a custom category
+# fails a test instead of silently shipping mixed-language text.
+_APPLY_FRAGMENTS_CATEGORY = "apply_fragments"
+
+
+def _is_field_placeholder(value) -> bool:
+    return isinstance(value, FieldRef)
+
+
+async def _resolve_profile_field_label(hass: HomeAssistant, field_name: str) -> str:
+    """The add-profile form's own label for one profile field, or the plain
+    English name if that lookup fails - never the raw key, never a raise."""
+    translated = await translation.async_get_translations(
+        hass, hass.config.language, "options", integrations={DOMAIN}
+    )
+    key = f"component.{DOMAIN}.options.step.add_profile.data.{field_name}"
+    return translated.get(key) or field_name.replace('_', ' ')
+
+
+async def _compose_voltage_order_blockers(hass: HomeAssistant, placeholders: dict[str, str]) -> str:
+    """Join the one or two blocking-neighbour clauses a voltage-order
+    conflict carries, in the wording `battery_apply._describe_voltage_conflict`
+    settled on - `lower_blocker_field`/`upper_blocker_field` are already
+    resolved to their localized labels by the time this runs."""
+    fragments = await translation.async_get_translations(
+        hass, hass.config.language, _APPLY_FRAGMENTS_CATEGORY, integrations={DOMAIN}
+    )
+
+    def fragment(key: str, default: str) -> str:
+        full_key = f"component.{DOMAIN}.{_APPLY_FRAGMENTS_CATEGORY}.{key}"
+        if full_key not in fragments:
+            # Should not happen with our own translations shipped and the
+            # category confirmed to resolve (see the comment above
+            # _APPLY_FRAGMENTS_CATEGORY) - if it ever does, the English
+            # default below is a real language mix for a non-English
+            # user, not a harmless fallback, so it must show up in the log.
+            _LOGGER.warning(
+                "Apply fragment %r missing from %r translations; using the English default",
+                key, hass.config.language,
+            )
+            return default
+        return fragments[full_key]
+
+    clauses = []
+    for prefix in ("lower", "upper"):
+        field_key = f"{prefix}_blocker_field"
+        if field_key not in placeholders:
+            continue
+        unchanged = placeholders.get(f"{prefix}_blocker_unchanged") == "1"
+        template = fragment(
+            "voltage_order_blocker_unchanged" if unchanged else "voltage_order_blocker",
+            "{name} is currently {value} (this profile leaves it unchanged)" if unchanged
+            else "{name} is currently {value}",
+        )
+        clauses.append(template.format(name=placeholders[field_key], value=placeholders[f"{prefix}_blocker_value"]))
+    join = fragment("voltage_order_join", " and ")
+    return join.join(clauses)
+
+
+async def _localize_apply_placeholders(hass: HomeAssistant, result: ApplyResult) -> dict[str, str]:
+    placeholders = dict(result.translation_placeholders)
+    for key, value in list(placeholders.items()):
+        if _is_field_placeholder(value):
+            placeholders[key] = await _resolve_profile_field_label(hass, value)
+    if result.translation_key == VOLTAGE_ORDER_CONFLICT_KEY:
+        placeholders["blockers"] = await _compose_voltage_order_blockers(hass, placeholders)
+        for extra in (
+            "lower_blocker_field", "lower_blocker_value", "lower_blocker_unchanged",
+            "upper_blocker_field", "upper_blocker_value", "upper_blocker_unchanged",
+        ):
+            placeholders.pop(extra, None)
+    return placeholders
+
+
+class InverterProfileSelect(CoordinatorEntity, SelectEntity):
+    """Applies a whole battery profile as one explicit transaction.
+
+    Options are exact profile names - the same string an automation
+    passes to `select.select_option`. State reflects only a confirmed
+    exact live match; it is never set to the option just clicked before
+    the device has actually confirmed it (see `async_select_option`).
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_has_entity_name = True
+    _attr_translation_key = _PROFILE_SELECT_PARAM
+
+    def __init__(self, hass, coordinator, inverter, hub, profiles: list[dict]) -> None:
+        super().__init__(coordinator)
+        self._hass = hass
+        self._inverter = inverter
+        self._hub = hub
+        self._profiles_by_name = {p["name"]: p for p in profiles}
+        self._attr_unique_id = _profile_select_unique_id(inverter)
+        self._attr_options = list(self._profiles_by_name)
+        self._state = self._match_from_coordinator()
+        assign_entity_id(hass, self, "select", _PROFILE_SELECT_PARAM)
+
+    def _match_from_coordinator(self) -> str | None:
+        live = _live_param_values(self.coordinator)
+        return matching_profile_name(list(self._profiles_by_name.values()), live)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self._inverter.device_info
+
+    @property
+    def available(self) -> bool:
+        return self._inverter.online and self._inverter.hub.online
+
+    @property
+    def current_option(self) -> str | None:
+        return self._state
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._state = self._match_from_coordinator()
+        if self._state is not None:
+            _clear_apply_mixed_state_issue(self._hass, self._inverter)
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        profile = self._profiles_by_name.get(option)
+        if profile is None:
+            raise HomeAssistantError(f"{option!r} is not a known battery profile")
+
+        result = await self._hub.async_apply_battery_profile(profile)
+
+        if result.outcome is ApplyOutcome.ROLLBACK_INCOMPLETE:
+            _raise_apply_mixed_state_issue(
+                self._hass, self._inverter, result.message,
+                translation_key=ISSUE_PROFILE_APPLY_MIXED_STATE,
+            )
+        elif result.outcome is ApplyOutcome.TRANSPORT_UNKNOWN and any(
+            step.transmitted for step in result.sent_steps
+        ):
+            # Amendment 5a: the criterion is whether a set frame is
+            # reliably known to have actually left the socket for at
+            # least one step, not just whether an attempt was journaled.
+            # A transport failure before anything was sent at all - no
+            # attempts yet (see the preflight-read failure case, which
+            # reaches this method as PREFLIGHT_FAILED instead), or this
+            # step's own send failing before transmitting anything -
+            # changed nothing, so it raises no issue.
+            _raise_apply_mixed_state_issue(
+                self._hass, self._inverter, result.message,
+                translation_key=ISSUE_PROFILE_APPLY_TRANSPORT_UNKNOWN,
+            )
+        elif result.outcome is ApplyOutcome.SUCCESS:
+            _clear_apply_mixed_state_issue(self._hass, self._inverter)
+
+        self._state = self._match_from_coordinator()
+        self.schedule_update_ha_state()
+
+        if result.outcome is not ApplyOutcome.SUCCESS:
+            if result.translation_key is not None:
+                placeholders = await _localize_apply_placeholders(self._hass, result)
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key=result.translation_key,
+                    translation_placeholders={"profile": option, **placeholders},
+                )
+            raise HomeAssistantError(f"Applying profile {option!r} failed: {result.message}")

@@ -41,6 +41,15 @@
   "options": {
     "step": {
       "init": {
+        "title": "Configure Inverter Xpert King",
+        "menu_options": {
+          "advanced_settings": "Advanced settings",
+          "add_profile": "Add profile",
+          "edit_profile": "Edit profile",
+          "delete_profile": "Delete profile"
+        }
+      },
+      "advanced_settings": {
         "title": "Advanced settings",
         "data": {
           "advanced_settings": "Enable advanced settings"
@@ -48,6 +57,95 @@
         "data_description": {
           "advanced_settings": "Adds settings to change battery type, battery voltage thresholds, charge/discharge current limits, output source priority, operation logic. WARNING! An incorrect value here may cut off power to the load or damage the battery - enable only if you know how to adjust battery voltage and current."
         }
+      },
+      "add_profile": {
+        "title": "Add profile",
+        "description": "A profile is a named set of battery overrides. Leave any setting on \"Do not change\" (or blank for a voltage) to skip it.",
+        "data": {
+          "name": "Profile name",
+          "under_voltage": "Battery - Under voltage",
+          "back_to_grid_voltage": "Battery - Back to grid voltage",
+          "bulk_voltage": "Battery - Bulk voltage",
+          "float_voltage": "Battery - Float voltage",
+          "back_to_discharge_voltage": "Battery - Back to discharge voltage",
+          "max_ac_charging_current": "Battery - Max AC charging current",
+          "max_charging_current": "Battery - Max charging current"
+        },
+        "data_description": {
+          "under_voltage": "Leave empty - do not change.",
+          "back_to_grid_voltage": "Leave empty - do not change.",
+          "bulk_voltage": "Leave empty - do not change.",
+          "float_voltage": "Leave empty - do not change.",
+          "back_to_discharge_voltage": "Leave empty - do not change. 0.0 V means stay on battery until fully charged.",
+          "max_ac_charging_current": "Only values the device currently allows are offered.",
+          "max_charging_current": "Only values the device currently allows are offered."
+        }
+      },
+      "edit_profile": {
+        "title": "Edit profile",
+        "data": {
+          "profile_id": "Profile"
+        }
+      },
+      "edit_profile_form": {
+        "title": "Edit profile",
+        "description": "A profile is a named set of battery overrides. Leave any setting on \"Do not change\" (or blank for a voltage) to skip it.",
+        "data": {
+          "name": "Profile name",
+          "under_voltage": "Battery - Under voltage",
+          "back_to_grid_voltage": "Battery - Back to grid voltage",
+          "bulk_voltage": "Battery - Bulk voltage",
+          "float_voltage": "Battery - Float voltage",
+          "back_to_discharge_voltage": "Battery - Back to discharge voltage",
+          "max_ac_charging_current": "Battery - Max AC charging current",
+          "max_charging_current": "Battery - Max charging current"
+        },
+        "data_description": {
+          "under_voltage": "Leave empty - do not change.",
+          "back_to_grid_voltage": "Leave empty - do not change.",
+          "bulk_voltage": "Leave empty - do not change.",
+          "float_voltage": "Leave empty - do not change.",
+          "back_to_discharge_voltage": "Leave empty - do not change. 0.0 V means stay on battery until fully charged.",
+          "max_ac_charging_current": "Only values the device currently allows are offered.",
+          "max_charging_current": "Only values the device currently allows are offered."
+        }
+      },
+      "delete_profile": {
+        "title": "Delete profile",
+        "data": {
+          "profile_id": "Profile"
+        }
+      },
+      "delete_profile_confirm": {
+        "title": "Delete profile",
+        "description": "Delete \"{name}\"?",
+        "data": {
+          "confirm": "Yes, delete this profile"
+        }
+      }
+    },
+    "error": {
+      "profile_name_required": "Profile name cannot be empty.",
+      "profile_name_too_long": "Profile name is too long (max {max_length} characters).",
+      "profile_name_duplicate": "A profile with this name already exists.",
+      "profile_all_do_not_change": "At least one setting must not be \"Do not change\".",
+      "profile_identical_to_existing": "This profile is identical to \"{other_profile}\" - the same settings with the same values, so the two cannot be told apart.",
+      "profile_voltage_order_conflict": "These two highlighted values cannot apply at the same time: {lower_value} V and {upper_value} V.",
+      "profile_current_unsupported": "This value is not currently offered by the device.",
+      "profile_under_voltage_range": "Must be {under_voltage_min}-{under_voltage_max} V, or left blank.",
+      "profile_back_to_grid_voltage_range": "Must be {back_to_grid_voltage_min}-{back_to_grid_voltage_max} V, or left blank.",
+      "profile_bulk_voltage_range": "Must be {bulk_voltage_min}-{bulk_voltage_max} V, or left blank.",
+      "profile_float_voltage_range": "Must be {float_voltage_min}-{float_voltage_max} V, or left blank.",
+      "profile_back_to_discharge_voltage_range": "Must be exactly 0.0 V (stay on battery until full) or {back_to_discharge_voltage_min}-{back_to_discharge_voltage_max} V, or left blank."
+    },
+    "abort": {
+      "battery_profile_storage_unrecognized": "Stored profile data is from a schema version this version of the integration does not recognize. It has been left untouched; profiles cannot be added, edited or deleted until this is resolved."
+    }
+  },
+  "selector": {
+    "battery_profile_current": {
+      "options": {
+        "do_not_change": "Do not change"
       }
     }
   },
@@ -73,6 +171,14 @@
           }
         }
       }
+    },
+    "battery_profile_apply_mixed_state": {
+      "title": "Battery profile change left settings in a mixed state",
+      "description": "{title}: a profile change could not be fully undone after it failed partway through, so the battery may now be running on a mix of two profiles. Details: {detail}. Check the battery voltage and current settings by hand, or apply a profile again once you know what state the battery is in - a confirmed match clears this."
+    },
+    "battery_profile_apply_transport_unknown": {
+      "title": "Connection lost while changing the battery profile",
+      "description": "{title}: the connection was lost partway through a profile change, after at least one setting had already been sent. The rollback was never attempted, so the last known state before the connection dropped was: {detail}. Check the battery voltage and current settings by hand, or apply a profile again once you know what state the battery is in - a confirmed match clears this."
     }
   },
   "entity": {
@@ -161,8 +267,8 @@
         "state": {
           "agm": "AGM",
           "flooded": "Flooded",
-          "user_defined": "User defined",
-          "pylon": "Pylontech",
+          "user_defined": "User define",
+          "pylon": "Pylon",
           "shinheung": "Shinheung",
           "weco": "Weco",
           "soltaro": "Soltaro"
@@ -173,6 +279,9 @@
       },
       "max_ac_charging_current": {
         "name": "Battery - Max AC charging current"
+      },
+      "battery_profile": {
+        "name": "Battery - Profile"
       }
     },
     "number": {
@@ -192,5 +301,45 @@
         "name": "Battery - Bulk voltage"
       }
     }
+  },
+  "exceptions": {
+    "battery_type_not_user_define": {
+      "message": "Cannot apply profile \"{profile}\": the inverter accepts battery voltage changes only while the battery type is \"{required_type}\", and it is currently \"{current_type}\". Change the battery type yourself and try again - the integration never changes it."
+    },
+    "apply_preflight_read_failed": {
+      "message": "Cannot apply profile \"{profile}\": could not read the inverter's current settings."
+    },
+    "apply_preflight_field_not_reported": {
+      "message": "Cannot apply profile \"{profile}\": the device did not report {field}."
+    },
+    "apply_preflight_voltage_out_of_range": {
+      "message": "Cannot apply profile \"{profile}\": {field} target {target} is outside its own {min}-{max} range."
+    },
+    "apply_preflight_current_allow_list_unreadable": {
+      "message": "Cannot apply profile \"{profile}\": could not read the device's current allow-list for {field}."
+    },
+    "apply_preflight_current_not_offered": {
+      "message": "Cannot apply profile \"{profile}\": {field} target {target} A is not currently offered by the device."
+    },
+    "apply_preflight_voltage_order_conflict": {
+      "message": "Cannot apply profile \"{profile}\": cannot reach {field} target {target} in any write order - {blockers}."
+    },
+    "apply_rolled_back": {
+      "message": "Cannot apply profile \"{profile}\": the inverter refused or did not confirm {field} (target {target}, device now reports {read_back}); the device now reports every changed setting back at its previous value."
+    },
+    "apply_rollback_incomplete": {
+      "message": "Cannot apply profile \"{profile}\": the inverter refused or did not confirm {field} (target {target}, device now reports {read_back}); rollback could not be fully confirmed - battery is left in a mixed state, check settings manually."
+    },
+    "apply_transport_unknown_not_transmitted": {
+      "message": "Cannot apply profile \"{profile}\": the connection failed before the command changing {field} could be sent - nothing was transmitted; {field} was last confirmed at {last_confirmed}."
+    },
+    "apply_transport_unknown_may_have_reached": {
+      "message": "Cannot apply profile \"{profile}\": a command changing {field} may have reached the inverter, but no confirming reply came back afterward, so the resulting state is unknown; {field} was last confirmed at {last_confirmed}."
+    }
+  },
+  "apply_fragments": {
+    "voltage_order_blocker": "{name} is currently {value}",
+    "voltage_order_blocker_unchanged": "{name} is currently {value} (this profile leaves it unchanged)",
+    "voltage_order_join": " and "
   }
 }

@@ -2,7 +2,6 @@ import json
 import logging
 import socket
 import time
-from datetime import datetime
 from os import path
 from textwrap import wrap
 
@@ -98,6 +97,14 @@ class InverterClient:
         self._frame_leftover = b''
         self.stale_frame_count = 0
         self._last_stale_frame_log = 0.0
+
+        # Whether the most recent get_data() call's own sendall() returned
+        # without raising - i.e. that request's bytes did leave this
+        # process for the socket, whatever happened to the reply after
+        # that. False means the opposite is reliably known: nothing for
+        # that call reached the wire at all (not connected, or the send
+        # itself raised before completing). Reset on every get_data() call.
+        self.last_sendall_succeeded = True
 
     def connect(self):
         # Keep an already-open socket. Opening another would orphan the
@@ -281,22 +288,21 @@ class InverterClient:
         return False
 
     def get_data(self, command, param=''):
+        self.last_sendall_succeeded = False
         if not self.connected:
             self.connect()
             if not self.connected:
                 return []
 
-        match command:
-           case 'QLD':
-            if(param==''): # if total energy per day without date set current date
-                cur_date=datetime.today().strftime('%Y%m%d')
-                param=cur_date
+        if command == 'QLD' and param == '':
+            raise ValueError("QLD requires an explicit date parameter (YYYYMMDD)")
 
         request = command + param
         message = bytes(request, 'latin1') + self.calc_crc(request) + bytes([13])
 
         try:
-            self.client_socket.send(message)
+            self.client_socket.sendall(message)
+            self.last_sendall_succeeded = True
             frame = self._read_frame()
         except (OSError, InverterCommError) as exc:
             _LOGGER.debug("get_data(%s) transport error: %s", command, exc)
@@ -359,17 +365,6 @@ class InverterClient:
             command_result[command]=command_data[command]
 
         return command_result
-
-    def GetInverterDataByCommandSync(self,command_type):
-        res=[]
-        command_list=self.GetCommandByType(command_type)
-
-        for command in command_list:
-            inverter_data=self.get_data(command)
-            received_data=self.process_data(command,inverter_data)
-            for received_item in received_data:
-                res.append(received_item)
-        return res
 
     def process_data(self, command, inverter_data):
         self.last_field_failures = set()
@@ -619,17 +614,3 @@ class InverterClient:
         received_data = self.process_data(command, inverter_data)
         return received_data
 
-    def get_energy_today(self):
-        command = 'QLD'
-        cur_date = datetime.today().strftime('%Y%m%d')
-        cur_date_reset_time = datetime.today().strftime('%Y-%m-%d') + ' 00:00:00'
-        inverter_data = self.get_data(command, cur_date)
-        received_data = self.process_data(command, inverter_data)
-        received_data[0]["last_reset"] = cur_date_reset_time
-        return received_data[0]
-
-    def get_energy_total(self):
-        command = 'QLT'
-        inverter_data = self.get_data(command)
-        received_data = self.process_data(command, inverter_data)
-        return received_data[0]
