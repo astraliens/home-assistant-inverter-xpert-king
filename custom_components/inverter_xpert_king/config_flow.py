@@ -18,6 +18,7 @@ from .battery_profile_storage import (
     is_current_schema as _is_current_schema,
     is_well_formed_record as _is_well_formed_record,  # noqa: F401 - test coverage calls this directly
     profile_container as _profile_container,
+    profiles_sorted_by_name as _profiles_sorted_by_name,
     remove_profile as _remove_profile,
     replace_profile as _replace_profile,
     usable_profiles as _usable_profiles,
@@ -526,7 +527,11 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="edit_profile",
             data_schema=vol.Schema(
-                {vol.Required("profile_id"): vol.In({p[_PROFILE_ID]: p[_PROFILE_NAME] for p in usable})}
+                {
+                    vol.Required("profile_id"): vol.In(
+                        {p[_PROFILE_ID]: p[_PROFILE_NAME] for p in _profiles_sorted_by_name(usable)}
+                    )
+                }
             ),
         )
 
@@ -549,7 +554,11 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="delete_profile",
             data_schema=vol.Schema(
-                {vol.Required("profile_id"): vol.In({p[_PROFILE_ID]: p[_PROFILE_NAME] for p in usable})}
+                {
+                    vol.Required("profile_id"): vol.In(
+                        {p[_PROFILE_ID]: p[_PROFILE_NAME] for p in _profiles_sorted_by_name(usable)}
+                    )
+                }
             ),
         )
 

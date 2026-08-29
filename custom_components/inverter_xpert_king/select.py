@@ -12,11 +12,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir, translation
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .battery_apply import VOLTAGE_ORDER_CONFLICT_KEY, ApplyOutcome, ApplyResult, FieldRef
 from .battery_current import CURRENT_SETTINGS, CurrentSetting, _format_current_param
-from .battery_profile_storage import profile_container, usable_profiles
+from .battery_profile_storage import profile_container, profiles_sorted_by_name, usable_profiles
 from .const import (
     CONF_ADVANCED_SETTINGS,
     DEFAULT_ADVANCED_SETTINGS,
@@ -404,21 +405,57 @@ def profile_matches_live(profile: dict, live: dict[str, object]) -> bool:
     return True
 
 
-def matching_profile_name(profiles: list[dict], live: dict[str, object]) -> str | None:
-    """Exact-match profile name, or None for no match or more than one.
+def matching_profile_names(profiles: list[dict], live: dict[str, object]) -> list[str]:
+    """Names of every profile whose explicit fields all agree with live,
+    in `profiles` order. May have more than one entry - that is a normal,
+    savable configuration (T23): a profile setting only currents and one
+    setting only voltages have no field explicit on both sides, so both
+    can match the same live state at once."""
+    return [p["name"] for p in profiles if profile_matches_live(p, live)]
 
-    More than one match is a normal, savable configuration: only true
-    duplicates are refused at save time, so profiles whose explicit
-    fields do not conflict - one setting currents, another voltages -
-    can both match the same live state. Never guess by picking the
-    first; unknown is the only honest state to show. That state is
-    otherwise indistinguishable from a plain no-match, so which
-    profiles overlapped is logged rather than silently swallowed.
+
+def matching_profile_name(
+    profiles: list[dict],
+    live: dict[str, object],
+    *,
+    remembered: str | None = None,
+    previously_ambiguous: frozenset[str] | None = None,
+    quiet: bool = False,
+) -> str | None:
+    """Resolve which profile name the select should show (D049).
+
+    Order: a remembered name still among the matches wins over any other
+    match; otherwise a single match wins; otherwise no selection. Never
+    falls back to guessing the first match on its own (T19) - `remembered`
+    only settles a tie between matches that already exist on their own
+    merits, it does not create one.
+
+    `remembered` is meant to be the name of the profile whose Apply last
+    reported `SUCCESS` - it is not re-verified here beyond still being
+    among `matches`, so a caller must not pass a name that could have
+    stopped matching for a reason other than a live change (see
+    select.py's own bookkeeping for that check).
+
+    A multi-match `remembered` cannot resolve is otherwise
+    indistinguishable from a plain no-match, so it is logged - but only
+    once per distinct composition. `previously_ambiguous` is the set
+    already logged for; an unchanged set does not warn again, so a
+    caller re-checking every coordinator cycle does not flood the log
+    while the same ambiguity persists. An ambiguity `remembered` resolves
+    never reaches this branch at all, so it never warns.
+
+    `quiet` mutes that warning without changing which name gets
+    returned - for a caller that has to compute this before it actually
+    knows `remembered` yet (RestoreEntity resolves it asynchronously
+    after construction) and would otherwise report an ambiguity as a
+    problem that a moment later turns out to have never been one.
     """
-    matches = [p["name"] for p in profiles if profile_matches_live(p, live)]
+    matches = matching_profile_names(profiles, live)
+    if remembered is not None and remembered in matches:
+        return remembered
     if len(matches) == 1:
         return matches[0]
-    if len(matches) > 1:
+    if len(matches) > 1 and not quiet and frozenset(matches) != previously_ambiguous:
         _LOGGER.warning(
             "Battery profiles %s all match the inverter's current settings at "
             "once; not reporting any of them as selected",
@@ -556,13 +593,24 @@ async def _localize_apply_placeholders(hass: HomeAssistant, result: ApplyResult)
     return placeholders
 
 
-class InverterProfileSelect(CoordinatorEntity, SelectEntity):
+class InverterProfileSelect(CoordinatorEntity, RestoreEntity, SelectEntity):
     """Applies a whole battery profile as one explicit transaction.
 
     Options are exact profile names - the same string an automation
-    passes to `select.select_option`. State reflects only a confirmed
-    exact live match; it is never set to the option just clicked before
-    the device has actually confirmed it (see `async_select_option`).
+    passes to `select.select_option`, sorted case-insensitively for
+    display only (T27; storage order is untouched). State reflects only
+    a confirmed exact live match; it is never set to the option just
+    clicked before the device has actually confirmed it (see
+    `async_select_option`).
+
+    On a real profile set, more than one profile can match the live
+    state at once (D049/K81) - a currents-only profile matches whatever
+    voltages happen to be set, and voltage profiles that are subsets of
+    each other's fields can too. The entity remembers the name of the
+    profile whose Apply last reported `SUCCESS` and shows it while it
+    remains among the current matches; that memory only settles a tie
+    between matches that already exist, it never substitutes for the
+    match check itself (T19). See `matching_profile_name`.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -574,15 +622,62 @@ class InverterProfileSelect(CoordinatorEntity, SelectEntity):
         self._hass = hass
         self._inverter = inverter
         self._hub = hub
-        self._profiles_by_name = {p["name"]: p for p in profiles}
+        self._profiles_by_name = {p["name"]: p for p in profiles_sorted_by_name(profiles)}
         self._attr_unique_id = _profile_select_unique_id(inverter)
         self._attr_options = list(self._profiles_by_name)
-        self._state = self._match_from_coordinator()
+        # Set from RestoreEntity once actually added to hass (see
+        # async_added_to_hass) - not available yet at construction time.
+        self._remembered_name: str | None = None
+        # The unresolved ambiguous match set already warned about, so a
+        # caller re-checking every coordinator cycle only warns once per
+        # distinct composition (K82). Reset to None whenever the state
+        # resolves, so a later recurrence of the same composition warns
+        # again instead of staying silent forever.
+        self._last_ambiguous_matches: frozenset[str] | None = None
+        # Quiet: `_remembered_name` is not restored yet, so an ambiguity
+        # here may be about to be resolved by RestoreEntity a moment
+        # later (async_added_to_hass, below) and would otherwise log a
+        # K82 warning for a problem that turns out to have never
+        # existed. Left out of the dedup bookkeeping on purpose - this
+        # probe must not count as "already warned", so the real check
+        # after restore is still free to warn if the ambiguity survives it.
+        self._state = self._match_from_coordinator(quiet=True)
         assign_entity_id(hass, self, "select", _PROFILE_SELECT_PARAM)
 
-    def _match_from_coordinator(self) -> str | None:
+    def _match_from_coordinator(self, *, quiet: bool = False) -> str | None:
         live = _live_param_values(self.coordinator)
-        return matching_profile_name(list(self._profiles_by_name.values()), live)
+        profiles = list(self._profiles_by_name.values())
+        matches = matching_profile_names(profiles, live)
+        name = matching_profile_name(
+            profiles, live,
+            remembered=self._remembered_name,
+            previously_ambiguous=self._last_ambiguous_matches,
+            quiet=quiet,
+        )
+        if quiet:
+            return name
+        unresolved = len(matches) > 1 and self._remembered_name not in matches
+        self._last_ambiguous_matches = frozenset(matches) if unresolved else None
+        return name
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._apply_restored_state(await self.async_get_last_state())
+
+    def _apply_restored_state(self, last_state) -> None:
+        """Adopt a restored state as the remembered name (D049), but only
+        when it still names a profile that exists now - a rename or a
+        delete since the last run drops it here. The live-match check
+        that decides whether it is actually shown runs the same way it
+        does on every other cycle.
+
+        Always recomputes, restored or not - this is the first non-quiet
+        check (see the constructor), so a startup ambiguity that memory
+        does not end up resolving still gets its one K82 warning here,
+        not never."""
+        if last_state is not None and last_state.state in self._profiles_by_name:
+            self._remembered_name = last_state.state
+        self._state = self._match_from_coordinator()
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -632,6 +727,10 @@ class InverterProfileSelect(CoordinatorEntity, SelectEntity):
             )
         elif result.outcome is ApplyOutcome.SUCCESS:
             _clear_apply_mixed_state_issue(self._hass, self._inverter)
+            # D049: only a confirmed SUCCESS updates the memory - a
+            # rollback, a mixed state or an unknown transport outcome
+            # never applied the profile, so none of them may move it.
+            self._remembered_name = option
 
         self._state = self._match_from_coordinator()
         self.schedule_update_ha_state()

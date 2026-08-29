@@ -98,6 +98,14 @@ def usable_profiles(container: dict[str, Any]) -> list[dict[str, Any]]:
     return [record for record in container["profiles"] if is_well_formed_record(record)]
 
 
+def profiles_sorted_by_name(profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Same records ordered by display name for listings - creation order
+    in storage is untouched, this only affects what a menu shows. The key
+    is case-insensitive so it does not depend on locale-specific casing
+    rules; Latin and Cyrillic names simply fall into two separate runs."""
+    return sorted(profiles, key=lambda record: record[PROFILE_NAME_KEY].casefold())
+
+
 def replace_profile(container: dict[str, Any], record: dict[str, Any], editing_id: str | None) -> dict[str, Any]:
     """Drop the well-formed record being replaced (if any), keep every
     other record - malformed ones included - and append the new one."""
